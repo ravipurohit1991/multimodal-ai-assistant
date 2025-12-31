@@ -59,7 +59,7 @@ Ever wanted an AI assistant that truly understands you? One that you can **talk 
 The ultimate vision is to have an animated 3D model of your choice that reacts and interacts during conversations, something similar to VTuber. Using technologies like Qwen ControlNet, image editing pipelines, PyGame, Wan, and all other opensource video/image generation models it should be possible to create a fully animated avatar that:
 - Lip-syncs to generated speech
 - Shows expressions and reactions based on conversation context
-- Responds with gestures and body language (essentially a more advanced version of microsfot CLIPPY, yes I am OLD)
+- Responds with gestures and body language (essentially a more advanced version of microsoft CLIPPY, yes I am OLD)
 
 This feature is resource-intensive and not a top priority, but represents the eventual direction for a truly immersive AI companion experience.
 
