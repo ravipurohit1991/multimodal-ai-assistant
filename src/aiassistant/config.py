@@ -83,6 +83,42 @@ class ConfigManager:
         )
         self.piper_use_cuda = os.getenv("PIPER_USE_CUDA", "true").lower() == "true"
 
+        # ---------- Chatterbox TTS Configuration ----------
+        # Model type: "turbo" (350M, fastest, supports tags), "standard" (500M English), or "multilingual" (500M, 23+ languages)
+        self.chatterbox_model_type = os.getenv("CHATTERBOX_MODEL_TYPE", "turbo").lower()
+        self.chatterbox_device = os.getenv("CHATTERBOX_DEVICE", "cuda")
+        self.chatterbox_ref_audio_dir = os.path.join(
+            os.path.dirname(config_file_dir), "models", "voices", "chatterbox_refs"
+        )
+        # Default reference audio for voice cloning (optional - Chatterbox can work without it)
+        _default_ref_audio = os.path.join(self.chatterbox_ref_audio_dir, "Goat.wav")
+        self.chatterbox_default_ref_audio = os.getenv(
+            "CHATTERBOX_DEFAULT_REF_AUDIO",
+            _default_ref_audio if os.path.exists(_default_ref_audio) else "",
+        )
+        # Exaggeration control (0.0-1.0+, default 0.5): higher = more expressive/dramatic speech
+        self.chatterbox_exaggeration = float(os.getenv("CHATTERBOX_EXAGGERATION", "0.5"))
+        # CFG weight (0.0-1.0, default 0.5): lower = slower, more deliberate pacing
+        self.chatterbox_cfg_weight = float(os.getenv("CHATTERBOX_CFG_WEIGHT", "0.5"))
+
+        # ---------- Soprano TTS Configuration ----------
+        # Backend: "auto" (default, uses LMDeploy if available), "lmdeploy", or "transformers"
+        self.soprano_backend = os.getenv("SOPRANO_BACKEND", "auto").lower()
+        self.soprano_device = os.getenv("SOPRANO_DEVICE", "cuda")
+        # Local model directory for caching models
+        self.soprano_model_dir = os.getenv(
+            "SOPRANO_MODEL_DIR",
+            os.path.join(os.path.dirname(__file__), "models", "soprano"),
+        )
+        # Cache size in MB for inference optimization (higher = faster but more VRAM)
+        self.soprano_cache_size_mb = int(os.getenv("SOPRANO_CACHE_SIZE_MB", "10"))
+        # Decoder batch size (higher = faster but more VRAM)
+        self.soprano_decoder_batch_size = int(os.getenv("SOPRANO_DECODER_BATCH_SIZE", "1"))
+        # Sampling parameters
+        self.soprano_temperature = float(os.getenv("SOPRANO_TEMPERATURE", "0.7"))
+        self.soprano_top_p = float(os.getenv("SOPRANO_TOP_P", "0.95"))
+        self.soprano_repetition_penalty = float(os.getenv("SOPRANO_REPETITION_PENALTY", "1.0"))
+
     def _init_user_data_config(self):
         """Initialize user data directory configuration"""
         self.user_data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "user_data")

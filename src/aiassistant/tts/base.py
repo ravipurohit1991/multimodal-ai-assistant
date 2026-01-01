@@ -63,3 +63,16 @@ class TTSEngine(ABC):
             Dictionary with engine info (name, current_voice, sample_rate, etc.)
         """
         pass
+
+    def get_device_info(self) -> dict:
+        """
+        Get device information for the TTS engine.
+
+        Returns:
+            Dictionary with device, loaded status, and memory info
+        """
+        return {
+            "device": "cpu",
+            "loaded": True,
+            "memory_allocated_mb": 0,
+        }

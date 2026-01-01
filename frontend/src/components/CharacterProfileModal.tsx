@@ -1,10 +1,12 @@
 import React, { useState, useRef } from "react";
+import { Theme } from "../theme";
 
 interface CharacterProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
   characterType: "user" | "assistant";
   currentImage: string | null;
+  theme: Theme;
   onImageUpdate: (image: string, path: string) => void;
 }
 
@@ -13,6 +15,7 @@ export function CharacterProfileModal({
   onClose,
   characterType,
   currentImage,
+  theme,
   onImageUpdate,
 }: CharacterProfileModalProps) {
   const [description, setDescription] = useState("");

@@ -1,7 +1,10 @@
+import { Theme } from "../theme";
+
 interface DebugModalProps {
   show: boolean;
   lastLlmPayload: any;
   lastLlmResponse: any;
+  theme: Theme;
   onClose: () => void;
 }
 
@@ -9,6 +12,7 @@ export function DebugModal({
   show,
   lastLlmPayload,
   lastLlmResponse,
+  theme,
   onClose
 }: DebugModalProps) {
   if (!show) return null;

@@ -1,4 +1,5 @@
 import React from "react";
+import { Theme } from "../theme";
 
 interface SettingsModalProps {
   show: boolean;
@@ -9,6 +10,7 @@ interface SettingsModalProps {
   characterDef: string;
   personality: string;
   connected: boolean;
+  theme: Theme;
   onClose: () => void;
   onUserNameChange: (name: string) => void;
   onAssistantNameChange: (name: string) => void;
@@ -28,6 +30,7 @@ export function SettingsModal({
   scenario,
   characterDef,
   personality,
+  theme,
   connected,
   onClose,
   onUserNameChange,

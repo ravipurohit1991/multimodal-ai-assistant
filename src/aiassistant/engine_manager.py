@@ -7,7 +7,7 @@ from aiassistant.imageexplainer import ImageExplainer
 from aiassistant.imagegen import ImageGenerator
 from aiassistant.llm import OllamaClient
 from aiassistant.stt import WhisperSTT
-from aiassistant.tts import PiperTTS
+from aiassistant.tts import ChatterboxTTS, PiperTTS, SopranoTTS
 from aiassistant.utils import get_resource_monitor, logger
 
 
@@ -16,7 +16,7 @@ class EngineManager:
 
     def __init__(self):
         self.stt_engine: WhisperSTT | None = None
-        self.tts_engine: PiperTTS | None = None
+        self.tts_engine: PiperTTS | ChatterboxTTS | SopranoTTS | None = None
         self.llm_client: OllamaClient | None = None
         self.image_explainer: ImageExplainer | None = None
         self.image_generator: ImageGenerator | None = None
@@ -44,13 +44,10 @@ class EngineManager:
             f"LLM client initialized: {config.llm_model} at {config.llm_host} (device: {config.llm_device}, keep_alive: {config.llm_keep_alive})"
         )
 
-        # Initialize TTS (Piper only)
-        self.tts_engine = PiperTTS(
-            voices_dir=config.voices_dir,
-            default_voice="en_GB-jenny_dioco-medium",
-            use_cuda=config.piper_use_cuda,
-        )
-        logger.info(f"Piper TTS initialized (CUDA: {config.piper_use_cuda})")
+        # Initialize TTS based on config
+        self.tts_engine = self._initialize_tts_engine(config.tts_engine)
+        if self.tts_engine is None:
+            logger.error("Failed to initialize any TTS engine!")
 
         # Initialize Image Explainer (if enabled)
         if config.imageexplainer_enabled:
@@ -80,6 +77,87 @@ class EngineManager:
             )
         else:
             logger.info("Image Generator disabled")
+
+    def _initialize_tts_engine(self, engine_type: str):
+        """Initialize TTS engine based on type"""
+        tts_engine = None
+
+        if engine_type == "chatterbox":
+            try:
+                tts_engine = ChatterboxTTS(
+                    model_type=config.chatterbox_model_type,
+                    device=config.chatterbox_device,
+                    ref_audio_dir=config.chatterbox_ref_audio_dir,
+                    default_ref_audio=config.chatterbox_default_ref_audio or None,
+                    exaggeration=config.chatterbox_exaggeration,
+                    cfg_weight=config.chatterbox_cfg_weight,
+                    target_sample_rate=16000,
+                )
+                logger.info(
+                    f"Chatterbox TTS initialized ({config.chatterbox_model_type}) on {config.chatterbox_device}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize Chatterbox TTS: {e}")
+                logger.warning(" Falling back to Piper TTS")
+
+        elif engine_type == "soprano":
+            try:
+                tts_engine = SopranoTTS(
+                    device=config.soprano_device,
+                    backend=config.soprano_backend,
+                    cache_size_mb=config.soprano_cache_size_mb,
+                    decoder_batch_size=config.soprano_decoder_batch_size,
+                    target_sample_rate=16000,
+                    temperature=config.soprano_temperature,
+                    top_p=config.soprano_top_p,
+                    repetition_penalty=config.soprano_repetition_penalty,
+                    model_dir=config.soprano_model_dir,
+                )
+                logger.info(
+                    f"Soprano TTS initialized (backend: {config.soprano_backend}) on {config.soprano_device}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize Soprano TTS: {e}")
+                logger.warning("Falling back to Piper TTS")
+
+        # Default to Piper if nothing else worked or if TTS_ENGINE=piper
+        if tts_engine is None:
+            tts_engine = PiperTTS(
+                voices_dir=config.voices_dir,
+                default_voice="en_GB-jenny_dioco-medium",
+                use_cuda=config.piper_use_cuda,
+            )
+            logger.info(f"Piper TTS initialized (CUDA: {config.piper_use_cuda})")
+
+        return tts_engine
+
+    def switch_tts_engine(self, engine_type: str) -> tuple[bool, str]:
+        """
+        Switch to a different TTS engine at runtime
+
+        Args:
+            engine_type: Type of engine to switch to ("piper", "chatterbox", or "soprano")
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        if engine_type == config.tts_engine and self.tts_engine is not None:
+            return True, f"Already using {engine_type} TTS"
+
+        logger.info(f"Switching TTS engine from {config.tts_engine} to {engine_type}...")
+
+        new_engine = self._initialize_tts_engine(engine_type)
+        if new_engine:
+            # Update config and engine
+            old_engine = config.tts_engine
+            config.tts_engine = engine_type
+            self.tts_engine = new_engine
+
+            logger.info(f"TTS engine switched from {old_engine} to {engine_type}")
+            return True, f"Switched to {engine_type} TTS"
+        else:
+            logger.error(f"Failed to switch to {engine_type} TTS")
+            return False, f"Failed to initialize {engine_type} TTS"
 
     def unload_image_generator(self) -> None:
         """Unload image generator model to free memory (for low VRAM mode)"""
@@ -121,8 +199,16 @@ class EngineManager:
         # TTS Engine Status
         if self.tts_engine:
             tts_device_info = self.tts_engine.get_device_info()
+            # Determine TTS engine name
+            tts_name = "Piper TTS"
+            if isinstance(self.tts_engine, ChatterboxTTS):
+                tts_name = f"Chatterbox TTS ({config.chatterbox_model_type})"
+            elif isinstance(self.tts_engine, SopranoTTS):
+                tts_name = "Soprano TTS"
+
             tts_info = {
-                "name": "Piper TTS",
+                "name": tts_name,
+                "engine": config.tts_engine,
                 "voice": self.tts_engine.current_voice_name,
                 "device": tts_device_info["device"],
                 "loaded": tts_device_info["loaded"],

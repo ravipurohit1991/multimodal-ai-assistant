@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { ModelStatus, ModelInfo } from "../types";
+import { Theme } from "../theme";
 
 interface ModelStatusPanelProps {
   show: boolean;
+  theme: Theme;
 }
 
-export function ModelStatusPanel({ show }: ModelStatusPanelProps) {
+export function ModelStatusPanel({ show, theme }: ModelStatusPanelProps) {
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

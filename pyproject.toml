@@ -43,9 +43,11 @@ dependencies = [
     "onnxruntime",
     # Chatterbox TTS (Optional - install with: pip install chatterbox-tts)
     # or build from git and pip install
-    # chatterbox-tts
+    # This will throw error, please build and install from source by
+    # changing the maximum numpy version to 2, and also change the pytorch version
+    # "chatterbox-tts",
     # Soprano TTS (Optional - ultra-fast TTS with 80M params)
-    # soprano-tts
+    "soprano-tts",
 
     # PyTorch and related libraries
     # NOTE: Install with CUDA 12.8 support using:
@@ -60,7 +62,7 @@ dependencies = [
 
     # Image Generation/Explainers
     "diffusers",
-    "transformers>=4.46.0",  # Also required for Image Explainer (Qwen3VL)
+    "transformers",  # Also required for Image Explainer (Qwen3VL)
     "accelerate",
     "Pillow",
 

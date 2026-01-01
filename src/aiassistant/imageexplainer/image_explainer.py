@@ -166,7 +166,7 @@ class ImageExplainer(ImageExplainerEngine):
         try:
             # Prepare messages in chat format
             messages = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": [{"type": "system", "text": system_prompt}]},
                 {
                     "role": "user",
                     "content": [

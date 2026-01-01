@@ -67,6 +67,7 @@ export default function App() {
   const vadRef = useRef<MicVAD | null>(null);
   const callAudioBufferRef = useRef<Int16Array[]>([]);
   const isSendingAudioRef = useRef(false);
+  const prevImageGenStateRef = useRef<boolean>(true);
 
   // Voice & Model settings
   const [llmHost, setLlmHost] = useState("http://localhost:11434");
@@ -566,6 +567,13 @@ export default function App() {
     if (!wsRef.current || inCall) return;
 
     try {
+      // Store current image gen state and disable it for call mode
+      prevImageGenStateRef.current = includeImageGen;
+      if (includeImageGen) {
+        setIncludeImageGen(false);
+        sendJson({ type: "set_imagegen_mode", enabled: false });
+      }
+
       setInCall(true);
       setInputMode("call");
       console.log("🔵 Starting call mode with VAD...");
@@ -649,6 +657,12 @@ export default function App() {
     callAudioBufferRef.current = [];
     isSendingAudioRef.current = false;
 
+    // Restore previous image gen state
+    if (prevImageGenStateRef.current && !includeImageGen) {
+      setIncludeImageGen(true);
+      sendJson({ type: "set_imagegen_mode", enabled: true });
+    }
+
     console.log("✅ Call ended");
   };
 
@@ -683,8 +697,13 @@ export default function App() {
       setInputMode("voice");
       callAudioBufferRef.current = [];
       isSendingAudioRef.current = false;
+
+      // Restore previous image gen state
+      if (prevImageGenStateRef.current && !includeImageGen) {
+        setIncludeImageGen(true);
+      }
     }
-  }, [connected, inCall]);
+  }, [connected, inCall, includeImageGen]);
 
   useEffect(() => {
     if (connected) {

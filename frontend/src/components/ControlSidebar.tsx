@@ -33,6 +33,7 @@ export function ControlSidebar({
   llmModel,
   availableModels,
   outputMode,
+  ttsEngine,
   useContext,
   showJsonPayload,
   showModelStatus,
@@ -308,7 +309,7 @@ export function ControlSidebar({
             <strong>Pipeline:</strong> 🎤 Speech-to-Text → 🤖 LLM → 🔊 Text-to-Speech
           </div>
           <div style={{ marginBottom: 6 }}>
-            <strong>Local Processing:</strong> Whisper STT & {outputMode === "voice" ? "TTS" : "Text"} run 100% locally
+            <strong>Local Processing:</strong> Whisper STT & {outputMode === "voice" ? `${ttsEngine.charAt(0).toUpperCase() + ttsEngine.slice(1)} TTS` : "Text"} run 100% locally
           </div>
           <div>
             <strong>Model:</strong> {llmModel}

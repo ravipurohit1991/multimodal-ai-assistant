@@ -15,7 +15,6 @@ from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
 from aiassistant.state import ConnState, cancel_llm, get_system_prompt_for_tts_engine
-from aiassistant.tts import PiperTTS
 from aiassistant.utils import image_to_base64, logger, phrase_chunker, save_image_to_disk
 
 
@@ -414,27 +413,32 @@ The image will be generated with your character description automatically. Keep 
         await send_json({"type": "ack", "system_prompt_updated": True})
 
     async def handle_set_tts_engine(data: dict[str, str]):
-        """Handle TTS engine switch - only Piper is supported"""
+        """Handle TTS engine switch - supports Piper, Chatterbox, and Soprano"""
         engine = str(data.get("engine", "piper")).lower()
         logger.info(f"Switching TTS engine to: {engine}")
 
         try:
-            # Only Piper TTS is supported
-            new_engine = PiperTTS(
-                voices_dir=config.voices_dir,
-                default_voice="en_GB-jenny_dioco-medium",
-            )
-            engine_manager.tts_engine = new_engine
-            logger.info("Switched to Piper TTS")
-            state.tts_engine_type = "piper"
-            state.messages[0] = {
-                "role": "system",
-                "content": get_system_prompt_for_tts_engine("piper"),
-            }
-            logger.info("Updated system prompt for Piper")
-            await send_json({"type": "tts_engine_changed", "tts_engine": "piper"})
+            # Use the engine manager's switch method
+            success, message = engine_manager.switch_tts_engine(engine)
+
+            if success:
+                state.tts_engine_type = engine
+                state.messages[0] = {
+                    "role": "system",
+                    "content": get_system_prompt_for_tts_engine(engine),
+                }
+                logger.info(f"✅ {message} - System prompt updated")
+                await send_json(
+                    {"type": "tts_engine_changed", "tts_engine": engine, "message": message}
+                )
+            else:
+                logger.error(f"❌ {message}")
+                await send_json({"type": "error", "message": message})
         except Exception as e:
             logger.error(f"Failed to switch TTS engine: {e}")
+            import traceback
+
+            traceback.print_exc()
             await send_json({"type": "error", "message": f"Failed to switch TTS: {str(e)}"})
 
     try:
