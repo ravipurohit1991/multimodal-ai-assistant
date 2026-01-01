@@ -11,12 +11,17 @@ import { SettingsModal } from "./components/SettingsModal";
 import { DebugModal } from "./components/DebugModal";
 import { TextInputArea } from "./components/TextInputArea";
 import { CharacterProfileModal } from "./components/CharacterProfileModal";
+import { getTheme, Theme } from "./theme";
 
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [assistantText, setAssistantText] = useState("");
+
+  // Theme state
+  const [themeName, setThemeName] = useState<'light' | 'dark'>('light');
+  const theme = useMemo(() => getTheme(themeName), [themeName]);
 
   // Conversation history
   const [conversationHistory, setConversationHistory] = useState<Message[]>([]);
@@ -47,7 +52,7 @@ export default function App() {
   const [useContext, setUseContext] = useState(true);
   const [includeImageGen, setIncludeImageGen] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  
+
   // Character images
   const [userCharacterImage, setUserCharacterImage] = useState<string | null>(null);
   const [assistantCharacterImage, setAssistantCharacterImage] = useState<string | null>(null);
@@ -55,7 +60,7 @@ export default function App() {
   const [showAssistantCharacterModal, setShowAssistantCharacterModal] = useState(false);
   const [userCharacterPath, setUserCharacterPath] = useState("");
   const [assistantCharacterPath, setAssistantCharacterPath] = useState("");
-  
+
   // Call mode state
   const [inCall, setInCall] = useState(false);
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
@@ -268,9 +273,9 @@ export default function App() {
     setTranscript(textInput || "[Image attached]");
 
     // Add to history immediately for text mode with optional image
-    setConversationHistory(prev => [...prev, { 
-      role: "user", 
-      content: textInput || "[Image attached]", 
+    setConversationHistory(prev => [...prev, {
+      role: "user",
+      content: textInput || "[Image attached]",
       timestamp: new Date(),
       ...(attachedImage && { image: attachedImage })
     }]);
@@ -325,12 +330,12 @@ export default function App() {
     try {
       const response = await fetch("http://127.0.0.1:8000/api/character/images");
       const data = await response.json();
-      
+
       if (data.user) {
         setUserCharacterImage(`data:image/png;base64,${data.user.image}`);
         setUserCharacterPath(data.user.path);
       }
-      
+
       if (data.assistant) {
         setAssistantCharacterImage(`data:image/png;base64,${data.assistant.image}`);
         setAssistantCharacterPath(data.assistant.path);
@@ -559,12 +564,12 @@ export default function App() {
   // Call mode handlers
   const startCall = async () => {
     if (!wsRef.current || inCall) return;
-    
+
     try {
       setInCall(true);
       setInputMode("call");
       console.log("🔵 Starting call mode with VAD...");
-      
+
       // Initialize VAD
       const vad = await MicVAD.new({
         onSpeechStart: () => {
@@ -576,10 +581,10 @@ export default function App() {
         onSpeechEnd: async (audio: Float32Array) => {
           console.log("🎤 Speech ended, processing audio...");
           setIsUserSpeaking(false);
-          
+
           if (isSendingAudioRef.current) return;
           isSendingAudioRef.current = true;
-          
+
           try {
             // Convert Float32Array to Int16Array (PCM16)
             const pcm16 = new Int16Array(audio.length);
@@ -587,7 +592,7 @@ export default function App() {
               const s = Math.max(-1, Math.min(1, audio[i]));
               pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
-            
+
             // Send audio to backend for transcription
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               console.log("📤 Sending audio chunk for transcription...");
@@ -612,7 +617,7 @@ export default function App() {
         positiveSpeechThreshold: 0.6,
         negativeSpeechThreshold: 0.4,
       });
-      
+
       vadRef.current = vad;
       vad.start();
       console.log("✅ Call mode active, VAD listening...");
@@ -625,9 +630,9 @@ export default function App() {
 
   const endCall = async () => {
     if (!inCall) return;
-    
+
     console.log("🔴 Ending call mode...");
-    
+
     // Stop VAD
     if (vadRef.current) {
       try {
@@ -637,13 +642,13 @@ export default function App() {
       }
       vadRef.current = null;
     }
-    
+
     setInCall(false);
     setIsUserSpeaking(false);
     setInputMode("voice");
     callAudioBufferRef.current = [];
     isSendingAudioRef.current = false;
-    
+
     console.log("✅ Call ended");
   };
 
@@ -702,11 +707,13 @@ export default function App() {
 
   return (
     <div style={{
-      fontFamily: "system-ui",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
       height: "100vh",
       display: "flex",
       overflow: "hidden",
-      background: "#f5f7fa"
+      background: theme.colors.background,
+      color: theme.colors.textPrimary,
+      transition: "background-color 0.3s ease, color 0.3s ease"
     }}>
       {/* Left Sidebar - Controls */}
       <ControlSidebar
@@ -722,6 +729,8 @@ export default function App() {
         includeImageGen={includeImageGen}
         showJsonPayload={showJsonPayload}
         showModelStatus={showModelStatus}
+        theme={theme}
+        themeName={themeName}
         onConnect={connect}
         onDisconnect={disconnect}
         onLlmHostChange={updateLlmHost}
@@ -730,6 +739,7 @@ export default function App() {
         onOutputModeChange={toggleOutputMode}
         onToggleDebug={() => setShowJsonPayload(!showJsonPayload)}
         onToggleModelStatus={() => setShowModelStatus(!showModelStatus)}
+        onThemeChange={(newTheme) => setThemeName(newTheme)}
       />
 
       {/* Middle - Conversation Panel with Text Input */}
@@ -737,7 +747,7 @@ export default function App() {
         flex: 1,
         display: "flex",
         flexDirection: "column",
-        background: "#ffffff"
+        background: theme.colors.surface
       }}>
         <ConversationPanel
           conversationHistory={conversationHistory}
@@ -755,6 +765,7 @@ export default function App() {
           showRealtimePanel={showRealtimePanel}
           userCharacterImage={userCharacterImage}
           assistantCharacterImage={assistantCharacterImage}
+          theme={theme}
           onTtsEngineChange={(engine) => {
             setTtsEngine(engine);
             sendJson({ type: "set_tts_engine", engine });
@@ -790,6 +801,7 @@ export default function App() {
           textInput={textInput}
           conversationLength={conversationHistory.length}
           attachedImage={attachedImage}
+          theme={theme}
           onTextChange={setTextInput}
           onImageAttach={setAttachedImage}
           onSend={sendTextMessage}
@@ -810,6 +822,7 @@ export default function App() {
         assistantText={assistantText}
         showRealtimeUser={showRealtimeUser}
         showRealtimeAssistant={showRealtimeAssistant}
+        theme={theme}
         onStartCall={startCall}
         onEndCall={endCall}
         onStartRecording={startRecording}
@@ -819,7 +832,7 @@ export default function App() {
       />
 
       {/* Model Status Panel */}
-      <ModelStatusPanel show={showModelStatus} />
+      <ModelStatusPanel show={showModelStatus} theme={theme} />
 
       {/* Settings Modal */}
       <SettingsModal
@@ -831,6 +844,7 @@ export default function App() {
         characterDef={characterDef}
         personality={personality}
         connected={connected}
+        theme={theme}
         onClose={() => setShowSettings(false)}
         onUserNameChange={setUserName}
         onAssistantNameChange={setAssistantName}
@@ -847,6 +861,7 @@ export default function App() {
         show={showJsonPayload}
         lastLlmPayload={lastLlmPayload}
         lastLlmResponse={lastLlmResponse}
+        theme={theme}
         onClose={() => setShowJsonPayload(false)}
       />
 
@@ -856,14 +871,16 @@ export default function App() {
         onClose={() => setShowUserCharacterModal(false)}
         characterType="user"
         currentImage={userCharacterImage}
+        theme={theme}
         onImageUpdate={handleUserCharacterImageUpdate}
       />
-      
+
       <CharacterProfileModal
         isOpen={showAssistantCharacterModal}
         onClose={() => setShowAssistantCharacterModal(false)}
         characterType="assistant"
         currentImage={assistantCharacterImage}
+        theme={theme}
         onImageUpdate={handleAssistantCharacterImageUpdate}
       />
     </div>

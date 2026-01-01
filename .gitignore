@@ -188,3 +188,6 @@ frontend/package-lock.json
 src/aiassistant/frontend/
 src/user_data/
 src/models/
+
+# miscellaneous
+misc/*

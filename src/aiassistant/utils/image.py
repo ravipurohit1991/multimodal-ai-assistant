@@ -6,8 +6,6 @@ from io import BytesIO
 
 from PIL import Image
 
-from aiassistant.utils import logger
-
 
 def save_image_to_disk(image: Image.Image, prompt: str, save_dir: str) -> str:
     """Save generated image to disk with timestamp and sanitized prompt
@@ -29,7 +27,6 @@ def save_image_to_disk(image: Image.Image, prompt: str, save_dir: str) -> str:
     filepath = os.path.join(save_dir, filename)
 
     image.save(filepath, format="PNG")
-    logger.info(f"Image saved: {filepath}")
     return filepath
 
 

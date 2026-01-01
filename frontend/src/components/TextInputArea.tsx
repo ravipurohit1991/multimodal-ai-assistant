@@ -1,10 +1,12 @@
 import { useRef } from "react";
+import { Theme } from "../theme";
 
 interface TextInputAreaProps {
   connected: boolean;
   textInput: string;
   conversationLength: number;
   attachedImage: string | null;
+  theme: Theme;
   onTextChange: (text: string) => void;
   onImageAttach: (base64Image: string | null) => void;
   onSend: () => void;
@@ -16,6 +18,7 @@ export function TextInputArea({
   textInput,
   conversationLength,
   attachedImage,
+  theme,
   onTextChange,
   onImageAttach,
   onSend,
@@ -59,15 +62,15 @@ export function TextInputArea({
   return (
     <div style={{
       padding: "20px 24px",
-      borderTop: "2px solid #e1e8ed",
-      background: "white"
+      borderTop: `1px solid ${theme.colors.border}`,
+      background: theme.colors.surface
     }}>
       {/* Image Preview */}
       {attachedImage && (
         <div style={{
           marginBottom: 12,
           padding: 8,
-          border: "2px solid #667eea",
+          border: `2px solid ${theme.colors.secondary}`,
           borderRadius: 8,
           display: "inline-block",
           position: "relative"
@@ -88,7 +91,7 @@ export function TextInputArea({
               position: "absolute",
               top: 4,
               right: 4,
-              background: "#f44336",
+              background: theme.colors.error,
               color: "white",
               border: "none",
               borderRadius: "50%",
@@ -99,8 +102,11 @@ export function TextInputArea({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontWeight: "bold"
+              fontWeight: "bold",
+              transition: "opacity 0.2s"
             }}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
           >
             ✕
           </button>
@@ -127,14 +133,16 @@ export function TextInputArea({
             padding: "12px 16px",
             fontSize: 14,
             borderRadius: 12,
-            border: "2px solid #e1e8ed",
+            border: `2px solid ${theme.colors.border}`,
             resize: "none",
             fontFamily: "inherit",
             outline: "none",
-            transition: "border-color 0.2s"
+            transition: "border-color 0.2s",
+            background: theme.colors.surface,
+            color: theme.colors.textPrimary
           }}
-          onFocus={(e) => e.currentTarget.style.borderColor = "#667eea"}
-          onBlur={(e) => e.currentTarget.style.borderColor = "#e1e8ed"}
+          onFocus={(e) => e.currentTarget.style.borderColor = theme.colors.secondary}
+          onBlur={(e) => e.currentTarget.style.borderColor = theme.colors.border}
         />
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {/* Image Upload Button */}
@@ -147,20 +155,20 @@ export function TextInputArea({
               fontSize: 14,
               background: connected
                 ? attachedImage
-                  ? "linear-gradient(135deg, #9c27b0 0%, #673ab7 100%)"
-                  : "linear-gradient(135deg, #ff9800 0%, #f57c00 100%)"
-                : "#e0e0e0",
-              color: connected ? "white" : "#999",
+                  ? theme.colors.secondary
+                  : theme.colors.warning
+                : theme.colors.buttonDisabled,
+              color: "white",
               border: "none",
               borderRadius: 12,
               cursor: connected ? "pointer" : "not-allowed",
               fontWeight: 600,
-              boxShadow: connected
-                ? "0 2px 8px rgba(255, 152, 0, 0.3)"
-                : "none",
+              boxShadow: connected ? theme.colors.shadowSm : "none",
               transition: "all 0.2s",
               whiteSpace: "nowrap"
             }}
+            onMouseEnter={(e) => { if (connected) e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { if (connected) e.currentTarget.style.opacity = "1"; }}
           >
             {attachedImage ? "🖼️ Change" : "🖼️ Image"}
           </button>
@@ -171,19 +179,21 @@ export function TextInputArea({
               padding: "10px 20px",
               fontSize: 14,
               background: connected && (textInput.trim() || attachedImage)
-                ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                : "#e0e0e0",
-              color: connected && (textInput.trim() || attachedImage) ? "white" : "#999",
+                ? theme.colors.buttonPrimary
+                : theme.colors.buttonDisabled,
+              color: "white",
               border: "none",
               borderRadius: 12,
               cursor: connected && (textInput.trim() || attachedImage) ? "pointer" : "not-allowed",
               fontWeight: 600,
               boxShadow: connected && (textInput.trim() || attachedImage)
-                ? "0 2px 8px rgba(102, 126, 234, 0.3)"
+                ? theme.colors.shadowSm
                 : "none",
               transition: "all 0.2s",
               whiteSpace: "nowrap"
             }}
+            onMouseEnter={(e) => { if (connected && (textInput.trim() || attachedImage)) e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { if (connected && (textInput.trim() || attachedImage)) e.currentTarget.style.opacity = "1"; }}
           >
             📤 Send
           </button>
@@ -195,19 +205,21 @@ export function TextInputArea({
               padding: "10px 20px",
               fontSize: 14,
               background: connected && conversationLength > 0
-                ? "linear-gradient(135deg, #00bcd4 0%, #0097a7 100%)"
-                : "#e0e0e0",
-              color: connected && conversationLength > 0 ? "white" : "#999",
+                ? theme.colors.info
+                : theme.colors.buttonDisabled,
+              color: "white",
               border: "none",
               borderRadius: 12,
               cursor: connected && conversationLength > 0 ? "pointer" : "not-allowed",
               fontWeight: 600,
               boxShadow: connected && conversationLength > 0
-                ? "0 2px 8px rgba(0, 188, 212, 0.3)"
+                ? theme.colors.shadowSm
                 : "none",
               transition: "all 0.2s",
               whiteSpace: "nowrap"
             }}
+            onMouseEnter={(e) => { if (connected && conversationLength > 0) e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { if (connected && conversationLength > 0) e.currentTarget.style.opacity = "1"; }}
           >
             ▶️ Continue
           </button>

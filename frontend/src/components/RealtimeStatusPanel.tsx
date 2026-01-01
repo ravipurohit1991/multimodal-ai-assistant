@@ -1,3 +1,5 @@
+import { Theme } from "../theme";
+
 interface RealtimeStatusPanelProps {
   show: boolean;
   connected: boolean;
@@ -10,6 +12,7 @@ interface RealtimeStatusPanelProps {
   assistantText: string;
   showRealtimeUser: boolean;
   showRealtimeAssistant: boolean;
+  theme: Theme;
   onStartCall: () => void;
   onEndCall: () => void;
   onStartRecording: () => void;
@@ -30,6 +33,7 @@ export function RealtimeStatusPanel({
   assistantText,
   showRealtimeUser,
   showRealtimeAssistant,
+  theme,
   onStartCall,
   onEndCall,
   onStartRecording,
@@ -42,8 +46,8 @@ export function RealtimeStatusPanel({
   return (
     <div style={{
       width: 350,
-      background: "#ffffff",
-      borderLeft: "2px solid #e1e8ed",
+      background: theme.colors.surface,
+      borderLeft: `1px solid ${theme.colors.border}`,
       display: "flex",
       flexDirection: "column",
       overflow: "auto"
@@ -51,16 +55,15 @@ export function RealtimeStatusPanel({
       {/* Panel Header */}
       <div style={{
         padding: "20px 24px",
-        borderBottom: "2px solid #e1e8ed",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        color: "white"
+        borderBottom: `1px solid ${theme.colors.border}`,
+        background: theme.colors.surface
       }}>
-        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>📊 Real-time Status</h3>
-        <p style={{ margin: "4px 0 0 0", fontSize: 11, opacity: 0.9 }}>Live transcription</p>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: theme.colors.textPrimary }}>📊 Real-time Status</h3>
+        <p style={{ margin: "4px 0 0 0", fontSize: 11, color: theme.colors.textSecondary }}>Live transcription</p>
       </div>
 
       {/* Hold to Talk Button */}
-      <div style={{ padding: "16px 20px", borderBottom: "1px solid #e1e8ed", background: "#f8f9fa" }}>
+      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${theme.colors.border}`, background: theme.colors.background }}>
         {/* Call Mode Buttons */}
         {!inCall ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -73,20 +76,22 @@ export function RealtimeStatusPanel({
                 fontSize: 13,
                 padding: "12px",
                 background: connected
-                  ? "linear-gradient(135deg, #2196F3 0%, #00BCD4 100%)"
-                  : "#cccccc",
+                  ? theme.colors.info
+                  : theme.colors.buttonDisabled,
                 color: "white",
                 border: "none",
                 borderRadius: 8,
                 cursor: connected ? "pointer" : "not-allowed",
                 fontWeight: 600,
-                boxShadow: connected ? "0 4px 12px rgba(33, 150, 243, 0.4)" : "none",
+                boxShadow: connected ? theme.colors.shadowMd : "none",
                 transition: "all 0.2s"
               }}
+              onMouseEnter={(e) => { if (connected) e.currentTarget.style.opacity = "0.85"; }}
+              onMouseLeave={(e) => { if (connected) e.currentTarget.style.opacity = "1"; }}
             >
               📞 Start Call (VAD)
             </button>
-            
+
             {/* Hold to Talk Button */}
             <button
               disabled={!connected}
@@ -98,16 +103,16 @@ export function RealtimeStatusPanel({
                 fontSize: 13,
                 padding: "12px",
                 background: recording
-                  ? "linear-gradient(135deg, #f44336 0%, #e91e63 100%)"
+                  ? theme.colors.error
                   : connected
-                    ? "linear-gradient(135deg, #4CAF50 0%, #8BC34A 100%)"
-                    : "#cccccc",
+                    ? theme.colors.success
+                    : theme.colors.buttonDisabled,
                 color: "white",
                 border: "none",
                 borderRadius: 8,
                 cursor: connected ? "pointer" : "not-allowed",
                 fontWeight: 600,
-                boxShadow: recording ? "0 4px 12px rgba(244, 67, 54, 0.4)" : "0 2px 4px rgba(0,0,0,0.1)",
+                boxShadow: recording ? theme.colors.shadowMd : theme.colors.shadowSm,
                 transition: "all 0.2s"
               }}
             >
@@ -120,22 +125,20 @@ export function RealtimeStatusPanel({
             <div style={{
               width: "100%",
               padding: "12px",
-              background: isUserSpeaking 
-                ? "linear-gradient(135deg, #4CAF50 0%, #8BC34A 100%)"
-                : "linear-gradient(135deg, #2196F3 0%, #00BCD4 100%)",
+              background: isUserSpeaking
+                ? theme.colors.success
+                : theme.colors.info,
               color: "white",
               borderRadius: 8,
               textAlign: "center",
               fontWeight: 600,
               fontSize: 13,
-              boxShadow: isUserSpeaking 
-                ? "0 4px 12px rgba(76, 175, 80, 0.5)" 
-                : "0 4px 12px rgba(33, 150, 243, 0.4)",
+              boxShadow: theme.colors.shadowMd,
               transition: "all 0.2s"
             }}>
               {isUserSpeaking ? "🎤 Speaking..." : "👂 Listening..."}
             </div>
-            
+
             {/* End Call Button */}
             <button
               onClick={onEndCall}
@@ -143,7 +146,7 @@ export function RealtimeStatusPanel({
                 width: "100%",
                 fontSize: 13,
                 padding: "12px",
-                background: "linear-gradient(135deg, #f44336 0%, #e91e63 100%)",
+                background: theme.colors.error,
                 color: "white",
                 border: "none",
                 borderRadius: 8,
@@ -262,7 +265,7 @@ export function RealtimeStatusPanel({
           💡 Quick Info
         </div>
         <div style={{ marginBottom: 8 }}>
-          <strong>📞 Call Mode:</strong> Continuous listening with Voice Activity Detection (VAD). 
+          <strong>📞 Call Mode:</strong> Continuous listening with Voice Activity Detection (VAD).
           Automatically detects when you start and stop speaking.
         </div>
         <div style={{ marginBottom: 8 }}>

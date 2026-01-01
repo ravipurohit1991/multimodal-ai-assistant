@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import { Message, VoiceInfo, TtsEngine, OutputMode } from "../types";
 import { MessageItem } from "./MessageItem";
+import { Theme } from "../theme";
 
 interface ConversationPanelProps {
   conversationHistory: Message[];
@@ -18,6 +19,7 @@ interface ConversationPanelProps {
   showRealtimePanel: boolean;
   userCharacterImage: string | null;
   assistantCharacterImage: string | null;
+  theme: Theme;
   onTtsEngineChange: (engine: TtsEngine) => void;
   onVoiceChange: (voice: string) => void;
   onToggleContext: (enabled: boolean) => void;
@@ -55,6 +57,7 @@ export function ConversationPanel({
   showRealtimePanel,
   userCharacterImage,
   assistantCharacterImage,
+  theme,
   onTtsEngineChange,
   onVoiceChange,
   onToggleContext,
@@ -87,15 +90,15 @@ export function ConversationPanel({
       {/* Conversation Header */}
       <div style={{
         padding: "20px 24px",
-        borderBottom: "2px solid #e1e8ed",
-        background: "white"
+        borderBottom: `1px solid ${theme.colors.border}`,
+        background: theme.colors.surface
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <h3 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "#2d3748" }}>
+            <h3 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: theme.colors.textPrimary }}>
               💬 Conversation History
             </h3>
-            
+
             {/* Character Avatars */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <button
@@ -105,16 +108,19 @@ export function ConversationPanel({
                   width: 36,
                   height: 36,
                   borderRadius: "50%",
-                  border: "2px solid #4299e1",
+                  border: `2px solid ${theme.colors.info}`,
                   cursor: "pointer",
                   overflow: "hidden",
                   padding: 0,
-                  background: userCharacterImage ? "transparent" : "#e2e8f0",
+                  background: userCharacterImage ? "transparent" : theme.colors.primaryLight,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 18
+                  fontSize: 18,
+                  transition: "transform 0.2s"
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.1)"}
+                onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
               >
                 {userCharacterImage ? (
                   <img src={userCharacterImage} alt={userName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -122,7 +128,7 @@ export function ConversationPanel({
                   "👤"
                 )}
               </button>
-              
+
               <button
                 onClick={onShowAssistantCharacter}
                 title={`${assistantName}'s Character`}
@@ -130,16 +136,19 @@ export function ConversationPanel({
                   width: 36,
                   height: 36,
                   borderRadius: "50%",
-                  border: "2px solid #48bb78",
+                  border: `2px solid ${theme.colors.success}`,
                   cursor: "pointer",
                   overflow: "hidden",
                   padding: 0,
-                  background: assistantCharacterImage ? "transparent" : "#e2e8f0",
+                  background: assistantCharacterImage ? "transparent" : theme.colors.primaryLight,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 18
+                  fontSize: 18,
+                  transition: "transform 0.2s"
                 }}
+                onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.1)"}
+                onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
               >
                 {assistantCharacterImage ? (
                   <img src={assistantCharacterImage} alt={assistantName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -150,7 +159,7 @@ export function ConversationPanel({
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ fontSize: 12, color: "#718096", marginRight: 8 }}>
+            <div style={{ fontSize: 12, color: theme.colors.textTertiary, marginRight: 8 }}>
               {conversationHistory.length} messages
             </div>
 
@@ -164,12 +173,12 @@ export function ConversationPanel({
                 style={{
                   fontSize: 11,
                   padding: "6px 8px",
-                  border: "1px solid #e1e8ed",
+                  border: `1px solid ${theme.colors.border}`,
                   borderRadius: 6,
-                  background: "white",
+                  background: theme.colors.surface,
                   cursor: connected ? "pointer" : "not-allowed",
                   fontWeight: 500,
-                  color: "#2d3748"
+                  color: theme.colors.textPrimary
                 }}
               >
                 <option value="piper">Piper</option>
@@ -188,12 +197,12 @@ export function ConversationPanel({
                 style={{
                   fontSize: 11,
                   padding: "6px 8px",
-                  border: "1px solid #e1e8ed",
+                  border: `1px solid ${theme.colors.border}`,
                   borderRadius: 6,
-                  background: "white",
+                  background: theme.colors.surface,
                   cursor: connected ? "pointer" : "not-allowed",
                   fontWeight: 500,
-                  color: "#2d3748",
+                  color: theme.colors.textPrimary,
                   maxWidth: 180
                 }}
               >
@@ -214,7 +223,7 @@ export function ConversationPanel({
                 disabled={!connected}
                 style={{ cursor: connected ? "pointer" : "not-allowed" }}
               />
-              <span style={{ fontWeight: 500, color: "#2d3748" }}>📚 Context</span>
+              <span style={{ fontWeight: 500, color: theme.colors.textPrimary }}>📚 Context</span>
             </label>
 
             {/* Include ImageGen Checkbox */}
@@ -226,7 +235,7 @@ export function ConversationPanel({
                 disabled={!connected}
                 style={{ cursor: connected ? "pointer" : "not-allowed" }}
               />
-              <span style={{ fontWeight: 500, color: "#2d3748" }}>🖼️ ImageGen</span>
+              <span style={{ fontWeight: 500, color: theme.colors.textPrimary }}>🖼️ ImageGen</span>
             </label>
 
             <button
@@ -236,15 +245,18 @@ export function ConversationPanel({
               style={{
                 fontSize: 20,
                 padding: "6px 10px",
-                background: connected ? "#ff9800" : "#e0e0e0",
-                color: connected ? "white" : "#999",
+                background: connected ? theme.colors.warning : theme.colors.buttonDisabled,
+                color: "white",
                 border: "none",
                 borderRadius: 6,
                 cursor: connected ? "pointer" : "not-allowed",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center"
+                justifyContent: "center",
+                transition: "opacity 0.2s"
               }}
+              onMouseEnter={(e) => { if (connected) e.currentTarget.style.opacity = "0.85"; }}
+              onMouseLeave={(e) => { if (connected) e.currentTarget.style.opacity = "1"; }}
             >
               🗑️
             </button>
@@ -255,15 +267,18 @@ export function ConversationPanel({
               style={{
                 fontSize: 20,
                 padding: "6px 10px",
-                background: connected ? "#f44336" : "#e0e0e0",
-                color: connected ? "white" : "#999",
+                background: connected ? theme.colors.error : theme.colors.buttonDisabled,
+                color: "white",
                 border: "none",
                 borderRadius: 6,
                 cursor: connected ? "pointer" : "not-allowed",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center"
+                justifyContent: "center",
+                transition: "opacity 0.2s"
               }}
+              onMouseEnter={(e) => { if (connected) e.currentTarget.style.opacity = "0.85"; }}
+              onMouseLeave={(e) => { if (connected) e.currentTarget.style.opacity = "1"; }}
             >
               🛑
             </button>
@@ -273,15 +288,18 @@ export function ConversationPanel({
               style={{
                 fontSize: 20,
                 padding: "6px 10px",
-                background: "#607d8b",
+                background: theme.colors.primary,
                 color: "white",
                 border: "none",
                 borderRadius: 6,
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center"
+                justifyContent: "center",
+                transition: "opacity 0.2s"
               }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
             >
               🎭
             </button>
@@ -291,15 +309,18 @@ export function ConversationPanel({
               style={{
                 fontSize: 18,
                 padding: "6px 10px",
-                background: showRealtimePanel ? "#667eea" : "#e0e0e0",
-                color: showRealtimePanel ? "white" : "#666",
+                background: showRealtimePanel ? theme.colors.secondary : theme.colors.buttonSecondary,
+                color: showRealtimePanel ? "white" : theme.colors.textSecondary,
                 border: "none",
                 borderRadius: 6,
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center"
+                justifyContent: "center",
+                transition: "all 0.2s"
               }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
             >
               📊
             </button>
@@ -312,16 +333,16 @@ export function ConversationPanel({
         flex: 1,
         overflowY: "auto",
         padding: "20px 24px",
-        background: "#f5f7fa"
+        background: theme.colors.background
       }}>
         {conversationHistory.length === 0 ? (
           <div style={{
             textAlign: "center",
             padding: "60px 20px",
-            color: "#a0aec0"
+            color: theme.colors.textTertiary
           }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
-            <p style={{ fontSize: 16, fontWeight: 500 }}>No messages yet</p>
+            <p style={{ fontSize: 16, fontWeight: 500, color: theme.colors.textSecondary }}>No messages yet</p>
             <p style={{ fontSize: 14, margin: "8px 0 0 0" }}>
               Start a conversation by holding the talk button or typing a message below
             </p>
@@ -341,6 +362,7 @@ export function ConversationPanel({
                 editingMessage={editingMessage}
                 userCharacterImage={userCharacterImage}
                 assistantCharacterImage={assistantCharacterImage}
+                theme={theme}
                 onEdit={onEditMessage}
                 onSaveEdit={onSaveEdit}
                 onCancelEdit={onCancelEdit}

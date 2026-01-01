@@ -1,4 +1,5 @@
 import { Message } from "../types";
+import { Theme } from "../theme";
 
 interface MessageItemProps {
   message: Message;
@@ -11,6 +12,7 @@ interface MessageItemProps {
   editingMessage: { index: number; text: string } | null;
   userCharacterImage: string | null;
   assistantCharacterImage: string | null;
+  theme: Theme;
   onEdit: (index: number) => void;
   onSaveEdit: (index: number) => void;
   onCancelEdit: () => void;
@@ -33,6 +35,7 @@ export function MessageItem({
   editingMessage,
   userCharacterImage,
   assistantCharacterImage,
+  theme,
   onEdit,
   onSaveEdit,
   onCancelEdit,
@@ -188,9 +191,9 @@ export function MessageItem({
                   />
                 </div>
               )}
-              
+
               {message.content}
-              
+
               {/* Display AI-generated image if present (for assistant messages) */}
               {message.role === "assistant" && message.image && (
                 <div style={{ marginTop: 12 }}>
@@ -217,7 +220,7 @@ export function MessageItem({
                 </div>
               )}
             </div>
-            
+
             {/* Action Buttons */}
             <div style={{
               marginTop: 6,
@@ -249,7 +252,7 @@ export function MessageItem({
                   {playingMessageIndex === index ? "⏹️" : "🔊"}
                 </button>
               )}
-              
+
               {/* Edit Button */}
               <button
                 onClick={() => onEdit(index)}
@@ -271,7 +274,7 @@ export function MessageItem({
               >
                 ✏️
               </button>
-              
+
               {/* Delete Button */}
               <button
                 onClick={() => onDelete(index)}
@@ -293,7 +296,7 @@ export function MessageItem({
               >
                 🗑️
               </button>
-              
+
               {/* Rewind Button (remove all downstream messages) */}
               {index < conversationLength - 1 && (
                 <button
@@ -317,7 +320,7 @@ export function MessageItem({
                   ⏪
                 </button>
               )}
-              
+
               {/* Resend Button (only for last message if it's a user message) */}
               {message.role === "user" && isLast && (
                 <button
@@ -341,7 +344,7 @@ export function MessageItem({
                   🔄
                 </button>
               )}
-              
+
               {/* Regenerate Button (only for last message if it's an assistant message) */}
               {message.role === "assistant" && isLast && (
                 <button

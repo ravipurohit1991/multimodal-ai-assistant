@@ -4,7 +4,7 @@ Engine Manager - Centralized initialization and management of STT, TTS, LLM, Ima
 
 from aiassistant.config import config
 from aiassistant.imageexplainer import ImageExplainer
-from aiassistant.imagegen import ImageGenerator, QwenImageGenerator
+from aiassistant.imagegen import ImageGenerator
 from aiassistant.llm import OllamaClient
 from aiassistant.stt import WhisperSTT
 from aiassistant.tts import PiperTTS
@@ -19,7 +19,7 @@ class EngineManager:
         self.tts_engine: PiperTTS | None = None
         self.llm_client: OllamaClient | None = None
         self.image_explainer: ImageExplainer | None = None
-        self.image_generator: ImageGenerator | QwenImageGenerator | None = None
+        self.image_generator: ImageGenerator | None = None
 
         self._initialize_engines()
 
@@ -67,29 +67,17 @@ class EngineManager:
 
         # Initialize Image Generator (if enabled)
         if config.imagegen_enabled:
-            if config.imagegen_model_type == "qwen":
-                # Use Qwen model for generation and editing
-                self.image_generator = QwenImageGenerator(
-                    model_path=config.imagegen_model,
-                    vae_path=config.imagegen_qwen_vae_path,
-                    unet_path=config.imagegen_qwen_unet_path,
-                    device=config.imagegen_device,
-                )
-                logger.info(
-                    f"Qwen Image Generator initialized: {config.imagegen_model} on {config.imagegen_device}"
-                )
-            else:
-                # Use traditional diffusion model
-                lora_path = config.imagegen_lora_path if config.imagegen_lora_enabled else None
-                self.image_generator = ImageGenerator(
-                    model_name=config.imagegen_model,
-                    device=config.imagegen_device,
-                    lora_path=lora_path,
-                    lora_weight=config.imagegen_lora_weight,
-                )
-                logger.info(
-                    f"Image Generator initialized: {config.imagegen_model} on {config.imagegen_device}"
-                )
+            # Use traditional diffusion model
+            lora_path = config.imagegen_lora_path if config.imagegen_lora_enabled else None
+            self.image_generator = ImageGenerator(
+                model_name=config.imagegen_model,
+                device=config.imagegen_device,
+                lora_path=lora_path,
+                lora_weight=config.imagegen_lora_weight,
+            )
+            logger.info(
+                f"Image Generator initialized: {config.imagegen_model} on {config.imagegen_device}"
+            )
         else:
             logger.info("Image Generator disabled")
 

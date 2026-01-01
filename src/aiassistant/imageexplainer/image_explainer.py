@@ -161,9 +161,7 @@ class ImageExplainer(ImageExplainerEngine):
         assert self.processor is not None, "Processor not initialized"
         assert self.model is not None, "Model not initialized"
 
-        system_prompt = (
-            "The user has sent this image. Describe this image in detail. Focus on physical attributes. The user is interested in your opinion and what sort of feelings it would incite in the viewer.",
-        )
+        system_prompt = "The user has sent this image. Describe this image in detail. Focus on physical attributes. The user is interested in your opinion and what sort of feelings it would incite in the viewer."
 
         try:
             # Prepare messages in chat format
