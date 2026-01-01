@@ -304,11 +304,10 @@ python -m aiassistant.app  # Runs backend server
 
 ### Live 2D/3D Character with Emotions
 
-The ultimate vision is to have an animated 3D model that reacts and interacts during conversations, similar to VTubers. Using technologies like:
-- Qwen ControlNet for pose control
-- Image editing pipelines for expression generation
-- PyGame/Three.js for real-time rendering
-- Open-source video/image generation models
+The ultimate vision is to have an animated 3D model of your choice that reacts and interacts during conversations, something similar to VTuber. Using technologies like Qwen ControlNet, image editing pipelines, PyGame, Wan, and all other opensource video/image generation models it should be possible to create a fully animated avatar that:
+- Lip-syncs to generated speech
+- Shows expressions and reactions based on conversation context
+- Responds with gestures and body language (essentially a more advanced version of microsoft CLIPPY, yes I am OLD)
 
 Features would include:
 - Lip-sync to generated speech
