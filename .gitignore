@@ -188,4 +188,3 @@ frontend/package-lock.json
 src/aiassistant/frontend/
 src/user_data/
 src/models/
-src/aiassistant/voices/**/*
