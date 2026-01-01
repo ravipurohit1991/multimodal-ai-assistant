@@ -1,0 +1,22 @@
+{
+    "python.testing.pytestEnabled": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": false,
+    "editor.rulers": [
+        72,
+        88
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "explicit"
+        },
+        "editor.formatOnSave": true,
+    },
+    "files.exclude": {
+        "**/.git": true,
+        ".venv": true,
+        ".pytest_cache": true,
+        "**/__pycache__": true
+    }
+}

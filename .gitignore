@@ -179,3 +179,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Frontend build outputs
+dist/
+build/
+frontend/node_modules/
+src/aiassistant/frontend/
+src/user_data/
+src/models/

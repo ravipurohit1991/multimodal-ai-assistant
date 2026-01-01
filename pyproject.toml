@@ -1,0 +1,132 @@
+[project]
+name = "aiassistant"
+version = "0.1.0"
+description = "Multimodal AI Assistant with TTS, STT, LLM, and Image Generation/Understanding capabilities"
+authors = [
+    {name = "Ravi PURUSHOTTAM", email = "ravi.purushottamrajpurohit@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+keywords = ["ai", "assistant", "tts", "stt", "llm", "multimodal", "image-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [    
+    # Web Framework
+    "fastapi",
+    "uvicorn[standard]",
+    "python-dotenv",
+    "websockets",
+    
+    # HTTP Client
+    "httpx",
+    
+    # Audio Processing
+    "numpy",
+    
+    # Speech Recognition (STT)
+    "faster-whisper",
+    
+    # LLM Client
+    "ollama",
+    
+    # Text-to-Speech (TTS)
+    # Piper TTS, default TTS engine
+    "piper-tts",
+    "onnxruntime",
+    # Chatterbox TTS (Optional - install with: pip install chatterbox-tts)
+    # or build from git and pip install 
+    # chatterbox-tts
+    # Soprano TTS (Optional - ultra-fast TTS with 80M params)
+    # soprano-tts
+    
+    # PyTorch and related libraries
+    # NOTE: Install with CUDA 12.8 support using:
+    # pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+    # For CPU-only or different CUDA versions, see: https://pytorch.org/get-started/locally/
+    # Uncomment for CPU only version, otherwise install with CUDA support as per your system after pip installing this
+    # "torch",
+    # "torchaudio",
+    # "torchvision",
+
+    "torchcodec",
+    
+    # Image Generation/Explainers
+    "diffusers",
+    "transformers>=4.46.0",  # Also required for Image Explainer (Qwen3VL)
+    "accelerate",
+    "Pillow",
+    
+    # Logging
+    "rich",
+
+    # Other
+    "python-multipart",
+    "nvidia-ml-py",  # pynvml for GPU monitoring (like nvtop)
+    "psutil",  # System resource monitoring
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+    "hatch",
+]
+
+[project.urls]
+Homepage = "https://github.com/ravipurohit1991/multimodal-ai-assistant"
+Repository = "https://github.com/ravipurohit1991/multimodal-ai-assistant"
+Issues = "https://github.com/ravipurohit1991/multimodal-ai-assistant/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/aiassistant/__init__.py"
+
+[tool.hatch.build.hooks.custom]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.wheel]
+include = ["src/*"]
+exclude = ["src/*.py", ".env"]
+force-include = { dist = "aiassistant/frontend" }
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/frontend",
+    "/hatch_build.py",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
