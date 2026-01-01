@@ -14,10 +14,9 @@ from fastapi import WebSocket, WebSocketDisconnect
 from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
-from aiassistant.logger import logger
 from aiassistant.state import ConnState, cancel_llm, get_system_prompt_for_tts_engine
 from aiassistant.tts import PiperTTS
-from aiassistant.utils import image_to_base64, phrase_chunker, save_image_to_disk
+from aiassistant.utils import image_to_base64, logger, phrase_chunker, save_image_to_disk
 
 
 async def ws_endpoint(ws: WebSocket):

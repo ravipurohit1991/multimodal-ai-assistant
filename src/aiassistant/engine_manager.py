@@ -6,10 +6,9 @@ from aiassistant.config import config
 from aiassistant.imageexplainer import ImageExplainer
 from aiassistant.imagegen import ImageGenerator, QwenImageGenerator
 from aiassistant.llm import OllamaClient
-from aiassistant.logger import logger
 from aiassistant.stt import WhisperSTT
 from aiassistant.tts import PiperTTS
-from aiassistant.utils import get_resource_monitor
+from aiassistant.utils import get_resource_monitor, logger
 
 
 class EngineManager:

@@ -9,9 +9,8 @@ import numpy as np
 import torch
 from piper import PiperVoice
 
-from aiassistant.logger import logger
 from aiassistant.tts.base import TTSAudio, TTSEngine
-from aiassistant.utils import get_resource_monitor
+from aiassistant.utils import get_resource_monitor, logger
 
 
 class PiperTTS(TTSEngine):

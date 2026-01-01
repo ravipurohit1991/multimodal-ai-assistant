@@ -13,7 +13,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from aiassistant.config import config
-from aiassistant.logger import logger
 from aiassistant.routes import (
     edit_image,
     explain_image,
@@ -27,6 +26,7 @@ from aiassistant.routes import (
     synthesize_tts,
     upload_character_image,
 )
+from aiassistant.utils import logger
 from aiassistant.websocket import ws_endpoint
 
 _logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ from typing import AsyncGenerator
 import httpx
 
 from aiassistant.llm.base import LLMEngine
-from aiassistant.logger import logger
+from aiassistant.utils import logger
 
 
 class OllamaClient(LLMEngine):

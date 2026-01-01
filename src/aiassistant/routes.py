@@ -13,8 +13,7 @@ from PIL import Image
 from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
-from aiassistant.logger import logger
-from aiassistant.utils import image_to_base64
+from aiassistant.utils import image_to_base64, logger
 
 
 async def root():

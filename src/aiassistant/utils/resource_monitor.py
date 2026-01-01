@@ -17,7 +17,7 @@ try:
 except ImportError:
     NVML_AVAILABLE = False
 
-from aiassistant.logger import logger
+from aiassistant.utils import logger
 
 
 @dataclass

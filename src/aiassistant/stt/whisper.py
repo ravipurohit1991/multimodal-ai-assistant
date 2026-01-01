@@ -8,8 +8,8 @@ import numpy as np
 import psutil
 from faster_whisper import WhisperModel
 
-from aiassistant.logger import logger
 from aiassistant.stt.base import STTEngine
+from aiassistant.utils import logger, resolve_local_model_path
 
 
 class WhisperSTT(STTEngine):
@@ -37,34 +37,6 @@ class WhisperSTT(STTEngine):
 
         logger.info(f"Initializing Whisper STT: {model} on {device} ({compute_type})")
 
-    def _resolve_local_model_path(self, path: str) -> str:
-        """
-        Resolve HuggingFace cache directory structure to actual model path.
-        If path points to models--org--name directory, find the latest snapshot.
-
-        Args:
-            path: Path to model directory
-
-        Returns:
-            Resolved path to actual model files
-        """
-        if not os.path.exists(path):
-            return path
-
-        # Check if this is a HuggingFace cache directory (contains snapshots/)
-        snapshots_dir = os.path.join(path, "snapshots")
-        if os.path.exists(snapshots_dir) and os.path.isdir(snapshots_dir):
-            # Get all snapshot directories
-            snapshots = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
-            if snapshots:
-                # Use the most recent snapshot (by modification time)
-                latest_snapshot = max(snapshots, key=lambda d: os.path.getmtime(os.path.join(snapshots_dir, d)))
-                resolved_path = os.path.join(snapshots_dir, latest_snapshot)
-                logger.info(f"Resolved HuggingFace cache path to snapshot: {resolved_path}")
-                return resolved_path
-
-        return path
-
     def _get_model(self) -> WhisperModel:
         """Lazy load the Whisper model"""
         if self._model is None:
@@ -77,7 +49,7 @@ class WhisperSTT(STTEngine):
             # Resolve local path if needed (handle HuggingFace cache structure)
             model_path = self.model_name
             if self.is_local_path:
-                model_path = self._resolve_local_model_path(self.model_name)
+                model_path = resolve_local_model_path(self.model_name)
 
             # Check if loading from local path
             if self.is_local_path:
