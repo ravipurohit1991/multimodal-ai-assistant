@@ -1,12 +1,12 @@
 # Multimodal AI Assistant
 
-> A fully-featured AI companion that sees, speaks, and creates—all running locally on your machine.
+> A fully-featured (I would like to think so) AI companion (or a poor man's version of AI Girlfriend) that sees, speaks, and creates—all running locally on your machine.
 
 ## What is This?
 
-Ever wanted an AI assistant that truly understands you? One that you can **talk to naturally**, **show images**, and have it **generate visuals** in response? This multimodal AI assistant brings together the best of modern AI capabilities into one seamless experience.
+Ever wanted an AI assistant, one that you can set a personality and interact ? One that you can **talk to naturally**, **show images**, and have it **generate visuals** in response? This multimodal AI assistant brings together the best of modern (whatever that is based on my limited understanding) AI capabilities into one seamless (when you have high end PC) experience.
 
-**Note**: This project is being vibe coded—built organically and iteratively as ideas flow.
+**Note**: This project is being vibe coded (including this ReadMe as well)—built organically and iteratively as ideas flow.
 
 ## Key Features
 
@@ -14,6 +14,7 @@ Ever wanted an AI assistant that truly understands you? One that you can **talk 
 - Speak naturally using your microphone—no typing required
 - Multiple input modes: voice, text, or text + images
 - Real-time voice responses with customizable TTS engines
+- Phone call mode (with VAD, for smart turns)
 
 ### **Visual Understanding**
 - Show it an image and describe what you want
@@ -46,13 +47,6 @@ Ever wanted an AI assistant that truly understands you? One that you can **talk 
 - **Text-to-Speech**: Multiple engines (Piper, Chatterbox, Soprano)
 - **Frontend**: React + TypeScript + Vite
 - **Backend**: FastAPI + WebSockets
-
-## System Requirements
-
-### Recommended Requirements
-- **RAM**: 16GB or more
-- **GPU**: NVIDIA GPU with 12GB+ VRAM
-- **Storage**: 50GB+ free space
 
 ## Quick Start
 
@@ -295,9 +289,7 @@ python -m aiassistant.app  # Runs backend server
 
 ## Perfect For
 
-- Developers building multimodal AI applications
 - Privacy-conscious users wanting local AI assistants
-- Researchers exploring vision-language-generation pipelines
 - Anyone who wants a truly interactive AI companion
 
 ## Future Plans
@@ -319,6 +311,7 @@ This is a long-term pipe dream, but with current AI models advancing rapidly, it
 
 ### Other Planned Features
 
+- Support Docker
 - Multi-character support (character profiles)
 - Conversation memory and context management
 - Voice cloning for personalized TTS
@@ -328,7 +321,7 @@ This is a long-term pipe dream, but with current AI models advancing rapidly, it
 
 ## Contributing
 
-We welcome contributions! Whether you want to:
+Contributions are welcomed! Whether you want to:
 - Add support for new LLM providers
 - Implement new TTS/STT engines
 - Integrate ComfyUI or other image generation backends
@@ -345,32 +338,8 @@ We welcome contributions! Whether you want to:
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
-### Guidelines
-
-- Follow existing code style and patterns
-- Add tests for new features
-- Update documentation as needed
-- Keep commits focused and descriptive
-
-## Support
-
-- **Issues**: Open an issue on GitHub for bugs or feature requests
-- **Discussions**: Use GitHub Discussions for questions and ideas
-- **Email**: [your-email@example.com]
-
-## Buy Me a Coffee
-
-If you find this project helpful and want to support its development:
-
-☕ [Buy Me a Coffee](https://www.buymeacoffee.com/ravipurushs)
-
-Your support helps keep this project maintained and evolving!
-
 
 ## Acknowledgments
 
 - Claude for keeping up with my weird requests
 
----
-
-**Note**: This is an active project under development. Features and APIs may change. Star the repo to stay updated! ⭐

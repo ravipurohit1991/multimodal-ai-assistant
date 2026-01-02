@@ -4,31 +4,6 @@
 
 The project uses **Hatch** as the build backend with a custom build hook that automatically compiles the frontend during package installation.
 
-## What Changed
-
-1. **`hatch_build.py`** - Custom build hook that:
-   - Runs `npm install` in the frontend directory
-   - Runs `npm run build` to compile the frontend
-   - Copies the compiled frontend to `src/aiassistant/frontend/`
-
-2. **`pyproject.toml`** - Updated to:
-   - Use `hatchling` as the build backend
-   - Configure the custom build hook
-   - Force-include the compiled `dist/` directory as `aiassistant/frontend/`
-   - Track version in `src/aiassistant/__init__.py`
-
-3. **`frontend/vite.config.ts`** - Updated to:
-   - Output build to `../dist/` directory instead of default `dist/`
-
-4. **`src/aiassistant/app.py`** - Updated to:
-   - Serve frontend static files from `aiassistant/frontend/`
-   - Mount `/assets` route for frontend assets
-   - Serve `index.html` at root path `/`
-   - Move health check to `/api/health`
-
-5. **`src/aiassistant/__init__.py`** - Created to:
-   - Define package version (tracked by Hatch)
-
 ## How to Build and Install
 
 ### Development (Editable) Install
