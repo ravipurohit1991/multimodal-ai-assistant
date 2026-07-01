@@ -8,6 +8,12 @@ Ever wanted an AI assistant, one that you can set a personality and interact ? O
 
 **Note**: This project is being vibe coded (including this ReadMe as well)—built organically and iteratively as ideas flow.
 
+## App Preview
+
+Here is the app running with demo conversation data, showing the local model controls, voice settings, scene/director tools, cast controls, realtime status, and chat composer:
+
+![Multimodal AI Assistant app screenshot with demo conversation data](docs/app-screenshot.png)
+
 ## Key Features
 
 ### **Natural Conversations**
