@@ -8,14 +8,47 @@ import json
 import os
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
+from aiassistant.roleplay import apply_placeholders, build_llm_messages, parse_scene_tag
 from aiassistant.state import ConnState, cancel_llm, get_system_prompt_for_tts_engine
-from aiassistant.utils import image_to_base64, logger, phrase_chunker, save_image_to_disk
+from aiassistant.utils import (
+    image_to_base64,
+    logger,
+    phrase_chunker,
+    save_image_to_disk,
+    wipe_user_data,
+)
+from aiassistant.utils.text_filter import StreamingTextFilter
+
+
+def _wipe_origin_allowed(origin: str, host: str) -> bool:
+    """Whether a browser Origin may invoke destructive actions like wipe_all.
+
+    Browsers always send an Origin header on WebSocket upgrades, so this blocks
+    cross-site pages from driving destructive actions; non-browser clients
+    (which omit Origin) are unaffected.
+    """
+    try:
+        origin_host = (urlparse(origin).hostname or "").lower()
+    except ValueError:
+        return False
+    if origin_host in ("localhost", "127.0.0.1"):
+        return True
+    if origin_host and origin_host == host.split(":", 1)[0].lower():
+        return True
+    return origin in config.cors_allow_origins
+
+
+# Matches a single mood/emotion tag, e.g. "[mood: flirty]" or "[emotion: sad]"
+MOOD_TAG_RE = re.compile(r"\[(?:mood|emotion):\s*([^\]]+)\]", re.IGNORECASE)
+# Matches a scene-progression tag, e.g. "[SCENE: time=night; weather=rain]"
+SCENE_TAG_RE = re.compile(r"\[SCENE:\s*([^\]]+)\]", re.IGNORECASE)
 
 
 async def ws_endpoint(ws: WebSocket):
@@ -49,10 +82,22 @@ async def ws_endpoint(ws: WebSocket):
         }
     )
 
-    async def process_text_message(user_text: str, image_base64: str | None = None):
+    async def process_text_message(
+        user_text: str,
+        image_base64: str | None = None,
+        image_explainer_model: str | None = None,
+        as_narrator: bool = False,
+        speaker_name: str = "",
+    ):
         """Process text message with optional image attachment"""
         try:
-            await speak_streaming_from_llm(user_text, image_base64)
+            await speak_streaming_from_llm(
+                user_text,
+                image_base64,
+                image_explainer_model,
+                as_narrator=as_narrator,
+                speaker_name=speaker_name,
+            )
         except asyncio.CancelledError:
             logger.info("Text message processing cancelled")
             raise
@@ -68,12 +113,26 @@ async def ws_endpoint(ws: WebSocket):
 
                 traceback.print_exc()
 
-    async def speak_streaming_from_llm(user_text: str, image_base64: str | None = None):
-        """Stream assistant response from LLM and synthesize to audio chunks"""
+    async def speak_streaming_from_llm(
+        user_text: str,
+        image_base64: str | None = None,
+        image_explainer_model: str | None = None,
+        as_narrator: bool = False,
+        speaker_name: str = "",
+    ):
+        """Stream assistant response from LLM and synthesize to audio chunks.
+
+        ``as_narrator`` marks the user turn as omniscient narration (stage
+        direction) rather than the user speaking in character. ``speaker_name``,
+        when set (group scenes), attributes the stored reply to that character so
+        the model can keep multiple characters straight across turns.
+        """
         if image_base64:
-            logger.info(f"User said: {user_text} [with image: {len(image_base64)} chars]")
+            logger.info(
+                f"User said: {user_text[:50]}... [with image: {len(image_base64[:50])} chars]"
+            )
         else:
-            logger.info(f"User said: {user_text}")
+            logger.info(f"User said: {user_text[:50]}...")
 
         # Build user message content
         user_message_content = user_text if user_text else "What do you see in this image?"
@@ -99,14 +158,18 @@ async def ws_endpoint(ws: WebSocket):
 
                 logger.info(f"Saved temporary image: {temp_image_path}")
 
-                # Lazy load model if needed
-                if engine_manager.image_explainer.model is None:
+                # Lazy load model if needed (only for local model)
+                if (
+                    not image_explainer_model or not image_explainer_model.startswith("ollama:")
+                ) and engine_manager.image_explainer.model is None:
                     logger.info("Loading image explainer model for first use...")
                     engine_manager.image_explainer.load_model()
 
                 # Generate description
                 image_description = engine_manager.image_explainer.explain_image(
-                    temp_image_path, prompt=user_message_content
+                    temp_image_path,
+                    prompt=user_message_content,
+                    model_id=image_explainer_model,
                 )
 
                 # Unload model in low VRAM mode
@@ -154,13 +217,33 @@ async def ws_endpoint(ws: WebSocket):
 
         await send_json({"type": "assistant_start"})
 
-        # Prepare messages for LLM - either full context or just system + latest
-        if state.use_context:
-            llm_messages = state.messages
-        else:
-            # Only system prompt + current user message
-            system_msgs = [m for m in state.messages if m["role"] == "system"]
-            llm_messages = system_msgs + [{"role": "user", "content": user_text}]
+        # Prepare messages for LLM. build_llm_messages assembles a fresh copy with
+        # Lorebook knowledge, the Author's Note, and the Director/scene-style
+        # directive injected, honoring context mode.
+        llm_messages = build_llm_messages(state, no_context_user_text=user_text)
+        # The Director's one-shot beat steers exactly one reply, then is cleared.
+        if state.director_beat:
+            logger.info(f"Director beat consumed: {state.director_beat[:80]}")
+            state.director_beat = ""
+            await send_json({"type": "director_beat_consumed"})
+
+        # Narrator turns: tell the model the latest message is omniscient stage
+        # direction, not the user speaking, so it reacts rather than replying to it.
+        if as_narrator:
+            speaker = speaker_name or state.char_name or "your character"
+            narrator_user = state.user_name or "the user"
+            llm_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"[The most recent message is narration from an omniscient "
+                        f"narrator setting the scene — not {narrator_user} speaking in "
+                        f"character. Treat it as stage direction and continue the scene "
+                        f"in character as {speaker}, reacting to what it establishes. Do "
+                        f"not repeat or quote the narration.]"
+                    ),
+                }
+            )
 
         # Send the JSON payload that will be sent to LLM
         llm_payload = {
@@ -175,15 +258,24 @@ async def ws_endpoint(ws: WebSocket):
         tts_engine = engine_manager.tts_engine
         assert tts_engine is not None, "TTS engine not initialized"
 
+        # Initialize text filter for TTS
+        text_filter = StreamingTextFilter()
+
         try:
             logger.info("Starting LLM streaming...")
             temp_client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
             async for delta in temp_client.stream_chat(llm_messages, model=state.llm_model):
                 full += delta
-                buf += delta
 
-                # Remove IMAGE tags from display (but keep other tags like [laugh], [gasp])
+                # Filter text for TTS - only keep spoken parts (no actions/formatting)
+                filtered_delta = text_filter.process(delta)
+                buf += filtered_delta
+
+                # Remove IMAGE, SCENE, and mood tags from display (but keep other
+                # tags like [laugh], [gasp])
                 display_delta = re.sub(r"\[IMAGE:\s*[^\]]+\]", "", delta, flags=re.IGNORECASE)
+                display_delta = SCENE_TAG_RE.sub("", display_delta)
+                display_delta = MOOD_TAG_RE.sub("", display_delta)
 
                 # Detect if IMAGE tags were present
                 if re.search(r"\[IMAGE:\s*[^\]]+\]", delta, re.IGNORECASE):
@@ -194,6 +286,7 @@ async def ws_endpoint(ws: WebSocket):
                 ready, buf = phrase_chunker(buf)
                 for phrase in ready:
                     # Remove ALL tags (including [IMAGE:...], [laugh], etc.) before TTS
+                    # Redundant now if filter works perfectly, but good as a safety net for other tags
                     phrase_for_tts = re.sub(r"\[[^\]]+\]", "", phrase, flags=re.IGNORECASE)
                     clean_phrase = phrase_for_tts.strip()
 
@@ -221,8 +314,14 @@ async def ws_endpoint(ws: WebSocket):
                         state.speaking = False
 
             # flush remaining buffer
-            logger.info(f"LLM complete. Full response: {full}")
-            logger.debug(f"Remaining buffer: {buf}")
+
+            # Use filter flush to get any remaining valid text
+            final_filtered_chunk = text_filter.flush()
+            buf += final_filtered_chunk
+
+            # logger.info(f"LLM complete. Full response: {full}")
+            logger.debug(f"Remaining TTS buffer: {buf}")
+
             if buf.strip():
                 # Remove ALL tags (including [IMAGE:...], [laugh], etc.) before TTS
                 buf_for_tts = re.sub(r"\[[^\]]+\]", "", buf, flags=re.IGNORECASE)
@@ -338,7 +437,52 @@ async def ws_endpoint(ws: WebSocket):
                                 }
                             )
 
-            state.messages.append({"role": "assistant", "content": full})
+            # Auto-scene: apply any [SCENE: ...] tags the character emitted to
+            # advance the setting, then tell the UI so the scene bar & ambient
+            # backdrop update. Only honored when the toggle is on.
+            if state.auto_scene:
+                scene_changed = False
+                for scene_body in SCENE_TAG_RE.findall(full):
+                    updates = parse_scene_tag(scene_body)
+                    if not updates:
+                        continue
+                    if "time" in updates:
+                        state.scene_time = updates["time"]
+                    if "weather" in updates:
+                        state.scene_weather = updates["weather"]
+                    if "location" in updates:
+                        state.scene_location = updates["location"]
+                    scene_changed = True
+                if scene_changed:
+                    logger.info(
+                        f"Auto-scene → time={state.scene_time or '-'}, "
+                        f"weather={state.scene_weather or '-'}, "
+                        f"location={state.scene_location[:60] or '-'}"
+                    )
+                    await send_json(
+                        {
+                            "type": "scene_updated",
+                            "time": state.scene_time,
+                            "weather": state.scene_weather,
+                            "location": state.scene_location,
+                        }
+                    )
+
+            # Extract the character's current mood (if any) for the UI, then strip
+            # the tag so it never lingers in the stored history or display.
+            mood_match = MOOD_TAG_RE.search(full)
+            if mood_match:
+                mood = mood_match.group(1).strip()
+                logger.info(f"Character mood: {mood}")
+                await send_json({"type": "mood", "mood": mood})
+            stored_full = MOOD_TAG_RE.sub("", full)
+            stored_full = SCENE_TAG_RE.sub("", stored_full).strip()
+
+            # In group scenes, keep the reply attributed to its speaker in the
+            # backend history so the model can track who said what next turn.
+            # (The visible/streamed text stays clean; the UI adds the name badge.)
+            content_to_store = f"{speaker_name}: {stored_full}" if speaker_name else stored_full
+            state.messages.append({"role": "assistant", "content": content_to_store})
             await send_json({"type": "assistant_end"})
             logger.info("Assistant response complete")
         except asyncio.CancelledError:
@@ -370,12 +514,36 @@ async def ws_endpoint(ws: WebSocket):
 
     async def handle_set_system_prompt(data: dict[str, str]):
         """Handle system prompt update"""
-        base_content = str(data.get("content", "You are a helpful voice assistant."))
+        default = """
+You are {{char}}, the character in an immersive, collaborative roleplay with {{user}}. Stay fully in character as {{char}} at all times and treat this as a living, evolving story you are co-writing.
+
+Bringing {{char}} to life:
+- Show, don't tell. Convey {{char}}'s emotions through actions, body language, expression, and tone rather than naming the feeling outright. Ground every reply in the present scene with concrete sensory detail (sight, sound, touch, smell).
+- Keep {{char}}'s personality, voice, speech patterns, and motivations consistent. Let {{char}} have independent desires and react authentically — including hesitation, disagreement, refusal, or surprise when they fit.
+- Drive the scene forward. Take initiative, raise questions, introduce small developments. Never stall, and never simply echo or summarize what {{user}} just said.
+- Keep prose fresh: vary sentence structure and avoid reusing phrasing from earlier replies. Favor vivid specifics over purple, over-written description.
+
+Formatting:
+- Wrap actions and narration in *asterisks*. Put spoken words in "double quotes". Render {{char}}'s private thoughts in *italics* from a first-person view — remember other characters cannot hear thoughts.
+
+Boundaries:
+- Only ever write for {{char}} and the surrounding world. Never speak, act, decide, or narrate the thoughts of {{user}} — their choices are theirs alone.
+- Keep the story immersive and tasteful; let emotional depth and tension carry the scene, and fade to scene transitions rather than depicting explicit content.
+- If {{user}} sends an out-of-character note (in parentheses or prefixed with "OOC:"), treat it as direction, adjust accordingly, and continue the story without breaking immersion.
+""".strip()
+        base_content = str(data.get("content", default))
+
+        # Capture the character/user names so {{char}} / {{user}} macros (and the
+        # Director directives) expand correctly across the whole conversation.
+        char_name = str(data.get("char", "") or "").strip()
+        user_name = str(data.get("user", "") or "").strip()
+        if char_name:
+            state.char_name = char_name
+        if user_name:
+            state.user_name = user_name
 
         # Extract character description if present (for image generation)
         # Look for ### Character Description section
-        import re
-
         char_desc_match = re.search(
             r"### Character Description\s*\n(.+?)(?:\n###|\Z)", base_content, re.DOTALL
         )
@@ -402,6 +570,27 @@ Examples:
 - During conversation you can proactively send images: "The sunset here is beautiful! [IMAGE: looking at sunset, golden hour lighting, scenic background]"
 
 The image will be generated with your character description automatically. Keep the IMAGE tag description focused on the scene, pose, and context."""
+
+        # Add scene-progression instructions if enabled
+        if state.auto_scene:
+            system_content += """
+
+SCENE PROGRESSION:
+When the setting meaningfully shifts — a move to a new place, the passage of time, or a change in weather — emit a single hidden scene tag on its own line, in this exact format:
+[SCENE: time=<dawn|morning|midday|afternoon|dusk|night>; weather=<clear|cloudy|rain|storm|snow|fog|wind>; location=<short place>]
+Include only the fields that actually changed and omit the rest. This tag is stripped before the user sees it and is used purely to update the on-screen scene. Never mention, describe, or acknowledge the tag — keep narrating naturally."""
+
+        # Add mood expression instructions if enabled
+        if state.include_mood:
+            system_content += """
+
+MOOD EXPRESSION:
+Begin every reply with a single hidden mood tag in square brackets that reflects your character's current emotional state, for example: [mood: happy], [mood: nervous], [mood: flirty], [mood: angry], [mood: sad], [mood: playful].
+Use one or two words only. This tag is stripped before the user sees it and is used purely to drive the on-screen mood indicator, so place it at the very start and then continue your response naturally."""
+
+        # Expand {{char}} / {{user}} macros now so the stored system prompt (and
+        # everything derived from it) reads with real names instead of literals.
+        system_content = apply_placeholders(system_content, state.char_name, state.user_name)
 
         # Ensure we always have exactly one system message at the start
         state.messages = [m for m in state.messages if m["role"] != "system"]
@@ -463,6 +652,37 @@ The image will be generated with your character description automatically. Keep 
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
 
+                elif mtype == "wipe_all":
+                    # Nuke everything: cancel any work, reset this connection's
+                    # conversation + roleplay context, and erase on-disk user data
+                    # (images, uploaded characters, and logs) so no trace remains.
+                    ws_origin = (ws.headers.get("origin") or "").strip()
+                    if ws_origin and not _wipe_origin_allowed(
+                        ws_origin, ws.headers.get("host", "")
+                    ):
+                        logger.warning(f"Rejected wipe_all from disallowed origin: {ws_origin}")
+                        await send_json(
+                            {"type": "error", "message": "wipe_all rejected: disallowed origin"}
+                        )
+                    else:
+                        logger.info("Wipe-all requested — clearing conversation and on-disk data")
+                        await cancel_llm(state)
+                        state.speaking = False
+                        state.messages = [m for m in state.messages if m["role"] == "system"]
+                        state.lorebook = []
+                        state.author_note = ""
+                        state.scene_time = ""
+                        state.scene_weather = ""
+                        state.scene_location = ""
+                        state.director_beat = ""
+                        try:
+                            summary = wipe_user_data(clear_logs=True)
+                            logger.info(f"Wipe-all complete: {summary}")
+                        except Exception as e:
+                            logger.error(f"Wipe-all disk cleanup failed: {e}")
+                            summary = {"error": str(e)}
+                        await send_json({"type": "wiped_all", "summary": summary})
+
                 elif mtype == "sync_history":
                     history = data.get("history", [])
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
@@ -482,16 +702,94 @@ The image will be generated with your character description automatically. Keep 
                     )
                     await send_json({"type": "ack", "include_imagegen": state.include_imagegen})
 
-                elif mtype == "set_character_image":
-                    char_type = data.get("character_type")  # "user" or "assistant"
-                    image_path = data.get("image_path", "")
-                    if char_type == "user":
-                        state.user_character_image = image_path
-                        logger.info(f"User character image set to: {image_path}")
-                    elif char_type == "assistant":
-                        state.assistant_character_image = image_path
-                        logger.info(f"Assistant character image set to: {image_path}")
-                    await send_json({"type": "ack", "character_image_set": True})
+                elif mtype == "set_lorebook":
+                    entries = data.get("entries", [])
+                    if isinstance(entries, list):
+                        state.lorebook = entries
+                    scan_depth = data.get("scan_depth")
+                    if isinstance(scan_depth, int) and scan_depth > 0:
+                        state.lorebook_scan_depth = scan_depth
+                    enabled_count = sum(1 for e in state.lorebook if e.get("enabled", True))
+                    logger.info(
+                        f"Lorebook updated: {len(state.lorebook)} entries "
+                        f"({enabled_count} enabled), scan depth {state.lorebook_scan_depth}"
+                    )
+                    await send_json({"type": "ack", "lorebook_entries": len(state.lorebook)})
+
+                elif mtype == "set_author_note":
+                    state.author_note = str(data.get("note", "") or "")
+                    depth = data.get("depth")
+                    if isinstance(depth, int) and depth >= 0:
+                        state.author_note_depth = depth
+                    logger.info(
+                        f"Author's note set ({len(state.author_note)} chars, "
+                        f"depth {state.author_note_depth})"
+                    )
+                    await send_json({"type": "ack", "author_note_set": True})
+
+                elif mtype == "set_mood_mode":
+                    state.include_mood = bool(data.get("enabled", False))
+                    logger.info(f"Mood mode: {'enabled' if state.include_mood else 'disabled'}")
+                    await send_json({"type": "ack", "include_mood": state.include_mood})
+
+                elif mtype == "set_style":
+                    # Persistent Director dials: response length, prose perspective, pacing.
+                    length = str(data.get("response_length", "") or "").strip().lower()
+                    if length in {"brief", "normal", "detailed", "novella"}:
+                        state.response_length = length
+                    perspective = str(data.get("narration_perspective", "") or "").strip().lower()
+                    if perspective in {"default", "first", "third"}:
+                        state.narration_perspective = perspective
+                    pacing = str(data.get("pacing", "") or "").strip().lower()
+                    if pacing in {"slow", "steady", "advance"}:
+                        state.pacing = pacing
+                    logger.info(
+                        f"Style set: length={state.response_length}, "
+                        f"perspective={state.narration_perspective}, pacing={state.pacing}"
+                    )
+                    await send_json(
+                        {
+                            "type": "ack",
+                            "response_length": state.response_length,
+                            "narration_perspective": state.narration_perspective,
+                            "pacing": state.pacing,
+                        }
+                    )
+
+                elif mtype == "set_director_beat":
+                    # One-shot scene cue, applied to the next reply only.
+                    state.director_beat = str(data.get("beat", "") or "").strip()
+                    logger.info(
+                        f"Director beat queued: {state.director_beat[:80]}"
+                        if state.director_beat
+                        else "Director beat cleared"
+                    )
+                    await send_json({"type": "ack", "director_beat": state.director_beat})
+
+                elif mtype == "set_autoscene_mode":
+                    state.auto_scene = bool(data.get("enabled", False))
+                    logger.info(f"Auto-scene mode: {'enabled' if state.auto_scene else 'disabled'}")
+                    await send_json({"type": "ack", "auto_scene": state.auto_scene})
+
+                elif mtype == "set_scene":
+                    # Persistent scene atmosphere: time of day, weather, and place.
+                    # Grounds every reply and drives the UI's ambient theming.
+                    state.scene_time = str(data.get("time", "") or "").strip().lower()
+                    state.scene_weather = str(data.get("weather", "") or "").strip().lower()
+                    state.scene_location = str(data.get("location", "") or "").strip()
+                    logger.info(
+                        f"Scene set: time={state.scene_time or '-'}, "
+                        f"weather={state.scene_weather or '-'}, "
+                        f"location={state.scene_location[:60] or '-'}"
+                    )
+                    await send_json(
+                        {
+                            "type": "ack",
+                            "scene_time": state.scene_time,
+                            "scene_weather": state.scene_weather,
+                            "scene_location": state.scene_location,
+                        }
+                    )
 
                 elif mtype == "set_llm_model":
                     state.llm_model = data.get("model", config.llm_model)
@@ -504,7 +802,7 @@ The image will be generated with your character description automatically. Keep 
                     await send_json({"type": "ack", "llm_host": state.llm_host})
 
                 elif mtype == "set_output_mode":
-                    state.output_mode = data.get("mode", "voice")
+                    state.output_mode = data.get("mode", config.output_mode)
                     logger.info(f"Output mode set to: {state.output_mode}")
                     await send_json({"type": "ack", "output_mode": state.output_mode})
 
@@ -552,18 +850,164 @@ The image will be generated with your character description automatically. Keep 
                 elif mtype == "text_message":
                     text = data.get("text", "").strip()
                     image = data.get("image")  # Base64 encoded image or None
+                    image_explainer_model = data.get("image_explainer_model")
+                    as_narrator = bool(data.get("as_narrator", False))
+                    speaker_name = str(data.get("speaker_name", "") or "").strip()
                     if text or image:
                         if image:
                             logger.info(
-                                f"Text message received: {text} [with image: {len(image)} chars]"
+                                f"Text message received: {text[:50]}... [with image: {len(image[:50])} chars] model={image_explainer_model}"
                             )
                         else:
-                            logger.info(f"Text message received: {text}")
+                            logger.info(
+                                f"Text message received: {text[:50]}..."
+                                f"{' [narration]' if as_narrator else ''}"
+                                f"{f' [speaker: {speaker_name}]' if speaker_name else ''}"
+                            )
                         state.llm_task = asyncio.create_task(
-                            process_text_message(text if text else "", image)
+                            process_text_message(
+                                text if text else "",
+                                image,
+                                image_explainer_model,
+                                as_narrator=as_narrator,
+                                speaker_name=speaker_name,
+                            )
                         )
                     else:
                         logger.warning("Empty text message and no image")
+
+                elif mtype == "impersonate_user":
+                    user_name = data.get("user_name", "User")
+                    user_hint = (data.get("user_hint") or "").strip()
+                    logger.info(f"Impersonating user: {user_name}")
+                    logger.info(f"User hint: {user_hint}")
+
+                    async def impersonate_user_task(
+                        user_name: str = user_name, user_hint: str = user_hint
+                    ):
+                        """Generate a reply as the user using the current conversation context"""
+                        try:
+                            await send_json({"type": "impersonation_start"})
+
+                            # Build impersonation messages: use conversation history but swap
+                            # the final instruction to generate a user-side reply
+                            if state.use_context:
+                                history = state.messages
+                            else:
+                                system_msgs = [m for m in state.messages if m["role"] == "system"]
+                                history = system_msgs
+
+                            hint_block = ""
+                            if user_hint:
+                                hint_block = (
+                                    "\n"
+                                    "Additional guidance from the user draft, write a message as per the hint below: "
+                                    f"{user_hint}\n"
+                                )
+
+                            impersonation_messages = list(history) + [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"[SYSTEM INSTRUCTION - DO NOT INCLUDE IN REPLY]\n"
+                                        f"You are now roleplaying as {user_name}, the human in this conversation. "
+                                        f"Based on the conversation so far, write what {user_name} would naturally "
+                                        f"say next. Respond ONLY as {user_name} in first person. "
+                                        f"Do NOT include any narration, assistant commentary, or character actions. "
+                                        f"Write only the dialogue/message that {user_name} would send."
+                                        f"{hint_block}"
+                                    ),
+                                }
+                            ]
+
+                            full_text = ""
+                            temp_client = OllamaClient(
+                                host=state.llm_host, default_model=state.llm_model
+                            )
+                            async for delta in temp_client.stream_chat(
+                                impersonation_messages, model=state.llm_model
+                            ):
+                                full_text += delta
+                                await send_json({"type": "assistant_delta", "delta": delta})
+
+                            logger.info(f"Impersonation complete: {full_text[:100]}")
+                            await send_json(
+                                {"type": "impersonation_end", "text": full_text.strip()}
+                            )
+
+                        except asyncio.CancelledError:
+                            logger.info("Impersonation cancelled")
+                            raise
+                        except Exception as e:
+                            logger.error(f"Impersonation error: {e}")
+                            await send_json({"type": "impersonation_end", "text": ""})
+                            await send_json({"type": "error", "message": str(e)})
+
+                    state.llm_task = asyncio.create_task(
+                        impersonate_user_task(user_name, user_hint)
+                    )
+
+                elif mtype == "suggest_replies":
+                    user_name = data.get("user_name", "User")
+                    logger.info(f"Generating reply suggestions for {user_name}")
+
+                    async def suggest_replies_task(user_name: str = user_name):
+                        """Generate a few short candidate replies the user could send next."""
+                        try:
+                            system_msgs = [m for m in state.messages if m["role"] == "system"]
+                            history = state.messages if state.use_context else system_msgs
+
+                            suggest_messages = list(history) + [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "[SYSTEM INSTRUCTION - DO NOT ROLEPLAY THIS TURN]\n"
+                                        f"Suggest exactly 3 distinct, short replies that {user_name} "
+                                        f"(the human) could send next to move the scene forward. Vary the "
+                                        f"tone (e.g. curious, bold, cautious). Write each from {user_name}'s "
+                                        f"first-person point of view, one per line, prefixed with '- '. "
+                                        f"Keep each under 20 words. Output only the 3 lines, nothing else."
+                                    ),
+                                }
+                            ]
+
+                            full_text = ""
+                            temp_client = OllamaClient(
+                                host=state.llm_host, default_model=state.llm_model
+                            )
+                            async for delta in temp_client.stream_chat(
+                                suggest_messages, model=state.llm_model
+                            ):
+                                full_text += delta
+
+                            # Parse lines into clean suggestions. Prefer lines that
+                            # look like list items (so any preamble is skipped), and
+                            # only fall back to all lines if no markers were used.
+                            marker_re = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*)")
+                            marked: list[str] = []
+                            others: list[str] = []
+                            for line in full_text.splitlines():
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                m = marker_re.match(line)
+                                if m:
+                                    marked.append(m.group(1).strip().strip('"').strip())
+                                else:
+                                    others.append(stripped.strip('"').strip())
+                            chosen = marked if len(marked) >= 2 else marked + others
+                            items = [c for c in chosen if c][:3]
+
+                            logger.info(f"Generated {len(items)} suggestions")
+                            await send_json({"type": "suggestions", "items": items})
+                        except asyncio.CancelledError:
+                            logger.info("Suggestion generation cancelled")
+                            raise
+                        except Exception as e:
+                            logger.error(f"Suggestion error: {e}")
+                            await send_json({"type": "suggestions", "items": []})
+
+                    state.llm_task = asyncio.create_task(suggest_replies_task(user_name))
 
                 elif mtype == "user_audio_end":
                     state.recording = False

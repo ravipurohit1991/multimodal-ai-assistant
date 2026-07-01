@@ -1,6 +1,6 @@
 """
 Image Explainer Module - Vision-Language Model for image description
-Uses Qwen3VL-4B abliterated/uncensored model to generate textual descriptions of images
+Uses a Qwen3-VL vision-language model to generate textual descriptions of images
 
 Note: the model will be autodownloaded from HuggingFace upon first use.
 """
@@ -19,12 +19,12 @@ from aiassistant.utils import logger, resolve_local_model_path
 class ImageExplainer(ImageExplainerEngine):
     """
     Vision-Language Model wrapper for generating image descriptions.
-    Uses Qwen3VL-4B abliterated/uncensored model to explain images sent by users.
+    Uses a Qwen3-VL model to explain images sent by users.
     """
 
     def __init__(
         self,
-        model_id: str = "huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated",
+        model_id: str = "Qwen/Qwen3-VL-2B-Instruct",
         device: str = "auto",
         max_tokens: int = 256,
     ):
@@ -33,10 +33,8 @@ class ImageExplainer(ImageExplainerEngine):
 
         Args:
             model_id: HuggingFace model ID or local path to model directory
-            1. if you have better vram use 4B uncensored: "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
-                                                          "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-uncensored"
-            2. for lower vram use 2B abliterated: "huihui-ai/Huihui-Qwen3-VL-2B-Thinking-abliterated"
-                                                  "huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated"
+            1. if you have more vram, use the 4B model: "Qwen/Qwen3-VL-4B-Instruct"
+            2. for lower vram, use the 2B model: "Qwen/Qwen3-VL-2B-Instruct"
             3. or provide a local path: "C:\\path\\to\\model\\directory"
             device: Device to run on ('auto', 'cuda', 'cpu')
             max_tokens: Maximum tokens to generate for description
@@ -136,6 +134,8 @@ class ImageExplainer(ImageExplainerEngine):
         self,
         image_path: str,
         prompt: str = "",
+        system_prompt: str | None = None,
+        model_id: str | None = None,
     ) -> str:
         """
         Generate a textual description of an image.
@@ -143,6 +143,8 @@ class ImageExplainer(ImageExplainerEngine):
         Args:
             image_path: Path to the image file
             prompt: Custom prompt for the model (default: "Describe this image in detail.")
+            system_prompt: Optional system prompt to control model behavior
+            model_id: Optional model ID to override default. If starts with "ollama:", uses Ollama.
 
         Returns:
             String description of the image
@@ -154,14 +156,20 @@ class ImageExplainer(ImageExplainerEngine):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        # Ensure model is loaded
+        default_system_prompt = "You are an image description engine. Describe the image factually and objectively, without adding any interpretation, emotion, or conversational elements. Do not address the user or refer to yourself."
+        system_prompt = system_prompt if system_prompt is not None else default_system_prompt
+
+        # Check for Ollama model override
+        if model_id and model_id.startswith("ollama:"):
+            return self._explain_with_ollama(image_path, prompt, system_prompt, model_id)
+
+        # Standard local model execution
+        # Ensure model isloaded
         if self.model is None:
             self.load_model()
 
         assert self.processor is not None, "Processor not initialized"
         assert self.model is not None, "Model not initialized"
-
-        system_prompt = "The user has sent this image. Describe this image in detail. Focus on physical attributes. The user is interested in your opinion and what sort of feelings it would incite in the viewer."
 
         try:
             # Prepare messages in chat format
@@ -235,6 +243,66 @@ class ImageExplainer(ImageExplainerEngine):
 
         return device_info
 
+    def _explain_with_ollama(
+        self,
+        image_path: str,
+        prompt: str,
+        system_prompt: str | None,
+        model_id_full: str,
+    ) -> str:
+        """Helper to explain image using Ollama"""
+        import httpx
+        from PIL import Image
+
+        from aiassistant.config import config
+        from aiassistant.llm import OllamaClient
+        from aiassistant.utils import image_to_base64
+
+        try:
+            # Parse model name (remove "ollama:" prefix)
+            ollama_model = model_id_full.split(":", 1)[1]
+
+            logger.info(f"Explaining image using Ollama model: {ollama_model}")
+
+            # Initialize temp client just to get host
+            client = OllamaClient(host=config.llm_host, default_model=ollama_model)
+
+            # Prepare image
+            with Image.open(image_path) as img:
+                img_base64 = image_to_base64(img)
+
+            # Prepare messages
+            # Note: Ollama vision models expect user message with text and images
+            # Remove data URI prefix if present in base64
+            if "," in img_base64:
+                img_base64 = img_base64.split(",", 1)[1]
+
+            user_content = prompt if prompt else "Describe this image"
+
+            messages = [{"role": "user", "content": user_content, "images": [img_base64]}]
+
+            if system_prompt:
+                messages.insert(0, {"role": "system", "content": system_prompt})
+
+            # Use sync httpx request
+            url = f"{client.host}/api/chat"
+            payload = {"model": ollama_model, "messages": messages, "stream": False}
+
+            logger.debug(f"Sending request to Ollama: {url} for model {ollama_model}")
+
+            with httpx.Client(timeout=60.0) as http_client:
+                r = http_client.post(url, json=payload)
+                r.raise_for_status()
+                result = r.json()
+                response_text = result.get("message", {}).get("content", "")
+
+            logger.info(f"Ollama generated description: {response_text}...")
+            return response_text
+
+        except Exception as e:
+            logger.error(f"Failed to explain image with Ollama: {e}")
+            raise RuntimeError(f"Ollama image explanation failed: {e}")
+
     def get_info(self) -> dict:
         """Get information about the Image Explainer engine"""
         return {
@@ -251,7 +319,7 @@ _global_image_explainer: ImageExplainer | None = None
 
 
 def get_image_explainer(
-    model_id: str = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated",
+    model_id: str = "Qwen/Qwen3-VL-2B-Instruct",
     device: str = "auto",
     max_tokens: int = 256,
 ) -> ImageExplainer:

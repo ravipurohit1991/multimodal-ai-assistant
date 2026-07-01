@@ -26,6 +26,15 @@ Ever wanted an AI assistant, one that you can set a personality and interact ? O
 - The AI can autonomously decide when to generate visuals
 - Uses local Stable Diffusion for complete privacy
 
+### **Immersive Roleplay & Storytelling**
+- **Multiple characters (cast)** — build a roster, each with its own name, description, personality, avatar, and optional per-character system instruction; mark several "in scene" and pick who speaks next
+- **Scene atmosphere** — set the time of day, weather, and location; it grounds every reply and tints the conversation's ambient background
+- **Auto-scene** — let the character advance the time, weather, or place itself as the story moves
+- **Narrator beats** — drop in omniscient scene narration the characters react to, rendered as distinct scene lines
+- **Cinematic mode** — a one-click focused reading view with serif prose and a mood/scene-reactive backdrop
+- **Director controls** — steer length, perspective, pacing, and one-shot scene cues live, without editing prompts
+- Lorebook/World Info, Author's Note, moods, swipes, and SillyTavern-compatible character cards
+
 ### **Privacy-First**
 - Everything runs locally—no cloud dependencies required (optional)
 - Your conversations and images never leave your machine
@@ -197,13 +206,13 @@ You can implement ComfyUI endpoints by extending `src/aiassistant/imagegen/base.
 
 ```bash
 IMAGEEXPLAINER_ENABLED=true
-IMAGEEXPLAINER_MODEL=huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated
+IMAGEEXPLAINER_MODEL=Qwen/Qwen3-VL-2B-Instruct
 IMAGEEXPLAINER_DEVICE=auto
 ```
 
 Models:
-- `huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated` - 2B params, lower VRAM
-- `huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated` - 4B params, better quality
+- `Qwen/Qwen3-VL-2B-Instruct` - 2B params, lower VRAM
+- `Qwen/Qwen3-VL-4B-Instruct` - 4B params, better quality
 
 Models are downloaded from HuggingFace on first run.
 
@@ -259,7 +268,7 @@ IMAGEGEN_MODEL=/path/to/your/local/model
 Models are automatically downloaded on first use:
 
 ```bash
-IMAGEEXPLAINER_MODEL=huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated
+IMAGEEXPLAINER_MODEL=Qwen/Qwen3-VL-2B-Instruct
 ```
 
 ## Usage
@@ -312,7 +321,7 @@ This is a long-term pipe dream, but with current AI models advancing rapidly, it
 ### Other Planned Features
 
 - Support Docker
-- Multi-character support (character profiles)
+- Group chat with autonomous turn-taking (multiple characters replying on their own)
 - Conversation memory and context management
 - Voice cloning for personalized TTS
 - Custom image generation styles and LoRA support

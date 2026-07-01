@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { OutputMode, TtsEngine, VoiceInfo } from "../types";
 import { Theme } from "../theme";
 
@@ -25,6 +26,13 @@ interface ControlSidebarProps {
   onToggleDebug: () => void;
   onToggleModelStatus: () => void;
   onThemeChange: (theme: 'light' | 'dark') => void;
+  imageExplainerProvider: "local" | "ollama";
+  imageExplainerModel: string;
+  onImageExplainerProviderChange: (provider: "local" | "ollama") => void;
+  onImageExplainerModelChange: (model: string) => void;
+  onSaveSession: () => void;
+  onLoadSession: (file: File) => void;
+  onWipeEverything: () => void;
 }
 
 export function ControlSidebar({
@@ -39,16 +47,25 @@ export function ControlSidebar({
   showModelStatus,
   theme,
   themeName,
+  imageExplainerProvider,
+  imageExplainerModel,
   onConnect,
   onDisconnect,
   onLlmHostChange,
   onLlmModelChange,
   onRefreshModels,
   onOutputModeChange,
+  onImageExplainerProviderChange,
+  onImageExplainerModelChange,
   onToggleDebug,
   onToggleModelStatus,
-  onThemeChange
+  onThemeChange,
+  onSaveSession,
+  onLoadSession,
+  onWipeEverything
 }: ControlSidebarProps) {
+  const sessionFileRef = useRef<HTMLInputElement>(null);
+
   return (
     <div style={{
       width: 380,
@@ -234,6 +251,91 @@ export function ControlSidebar({
         </div>
       </div>
 
+      {/* Image Explainer Configuration */}
+      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
+        <label style={{
+          display: "block",
+          fontSize: 11,
+          fontWeight: 700,
+          marginBottom: 10,
+          color: theme.colors.textPrimary,
+          textTransform: "uppercase",
+          letterSpacing: "0.5px"
+        }}>
+          👁️ Image Explainer
+        </label>
+
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
+            Provider:
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => onImageExplainerProviderChange("local")}
+              style={{
+                flex: 1,
+                padding: "8px",
+                fontSize: 12,
+                background: imageExplainerProvider === "local" ? theme.colors.primaryLight : theme.colors.surface,
+                border: `1px solid ${imageExplainerProvider === "local" ? theme.colors.primary : theme.colors.border}`,
+                borderRadius: 6,
+                cursor: "pointer",
+                color: theme.colors.textPrimary,
+                fontWeight: imageExplainerProvider === "local" ? 600 : 400
+              }}
+            >
+              Local (Qwen3-VL)
+            </button>
+            <button
+              onClick={() => onImageExplainerProviderChange("ollama")}
+              style={{
+                flex: 1,
+                padding: "8px",
+                fontSize: 12,
+                background: imageExplainerProvider === "ollama" ? theme.colors.primaryLight : theme.colors.surface,
+                border: `1px solid ${imageExplainerProvider === "ollama" ? theme.colors.primary : theme.colors.border}`,
+                borderRadius: 6,
+                cursor: "pointer",
+                color: theme.colors.textPrimary,
+                fontWeight: imageExplainerProvider === "ollama" ? 600 : 400
+              }}
+            >
+              Ollama
+            </button>
+          </div>
+        </div>
+
+        {imageExplainerProvider === "ollama" && (
+          <div>
+            <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
+              Ollama Model:
+            </label>
+            <select
+              value={imageExplainerModel}
+              onChange={(e) => onImageExplainerModelChange(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "8px",
+                fontSize: 12,
+                border: `1px solid ${theme.colors.border}`,
+                borderRadius: 6,
+                background: theme.colors.surface,
+                color: theme.colors.textPrimary
+              }}
+            >
+              {availableModels.length > 0 ? (
+                availableModels.map(m => <option key={m} value={m}>{m}</option>)
+              ) : (
+                <option value={imageExplainerModel}>{imageExplainerModel}</option>
+              )}
+            </select>
+            <p style={{ margin: "4px 0 0 0", fontSize: 10, color: theme.colors.warning }}>
+              * Ensure selected model supports vision
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Output Mode Selection */}
       <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
         <label style={{
@@ -318,6 +420,76 @@ export function ControlSidebar({
         </div>
       </div>
 
+      {/* Session Save / Load */}
+      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
+        <label style={{
+          display: "block",
+          fontSize: 11,
+          fontWeight: 700,
+          marginBottom: 10,
+          color: theme.colors.textPrimary,
+          textTransform: "uppercase",
+          letterSpacing: "0.5px"
+        }}>
+          💾 Session
+        </label>
+        <p style={{ margin: "0 0 10px 0", fontSize: 11, color: theme.colors.textTertiary, lineHeight: 1.4 }}>
+          Save the whole chat, characters, lorebook and settings to a file — then load it later to continue where you
+          left off.
+        </p>
+        <input
+          ref={sessionFileRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onLoadSession(file);
+          }}
+          style={{ display: "none" }}
+        />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={onSaveSession}
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "8px",
+              background: theme.colors.buttonPrimary,
+              color: "white",
+              border: "none",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontWeight: 600,
+              transition: "opacity 0.2s"
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+          >
+            💾 Save Session
+          </button>
+          <button
+            onClick={() => sessionFileRef.current?.click()}
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "8px",
+              background: theme.colors.buttonSecondary,
+              color: theme.colors.textPrimary,
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: 6,
+              cursor: "pointer",
+              fontWeight: 600,
+              transition: "background 0.2s"
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.buttonSecondaryHover}
+            onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.buttonSecondary}
+          >
+            📂 Load Session
+          </button>
+        </div>
+      </div>
+
       {/* Debug Info Button */}
       <div style={{ padding: "16px 24px" }}>
         <button
@@ -371,6 +543,43 @@ export function ControlSidebar({
           }}
         >
           🔧 Model Status
+        </button>
+      </div>
+
+      {/* Danger Zone — irreversible full wipe */}
+      <div style={{
+        margin: "0 24px 20px 24px",
+        padding: 14,
+        borderRadius: 8,
+        border: `1px solid ${theme.colors.error}`,
+        background: theme.colors.errorLight,
+      }}>
+        <div style={{ fontWeight: 700, fontSize: 11, letterSpacing: "0.5px", textTransform: "uppercase", color: theme.colors.error, marginBottom: 6 }}>
+          ⚠️ Danger Zone
+        </div>
+        <p style={{ margin: "0 0 10px 0", fontSize: 11, lineHeight: 1.5, color: theme.colors.textSecondary }}>
+          Erase everything — this chat, all characters &amp; your persona, lorebook, scene,
+          saved settings, and the app's images, uploaded characters &amp; logs on disk.
+          No undo.
+        </p>
+        <button
+          onClick={onWipeEverything}
+          style={{
+            width: "100%",
+            fontSize: 13,
+            padding: "10px",
+            background: theme.colors.error,
+            color: "white",
+            border: "none",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontWeight: 700,
+            transition: "opacity 0.2s",
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+          onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+        >
+          🧨 Wipe Everything
         </button>
       </div>
     </div>

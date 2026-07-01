@@ -17,13 +17,20 @@ class ImageExplainerEngine(ABC):
         pass
 
     @abstractmethod
-    def explain_image(self, image_path: str, prompt: str | None = None) -> str:
+    def explain_image(
+        self,
+        image_path: str,
+        prompt: str | None = None,
+        system_prompt: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
         """
         Generate a textual description of an image.
 
         Args:
             image_path: Path to the image file
             prompt: Optional custom prompt for the model
+            system_prompt: Optional system prompt to control model behavior
 
         Returns:
             String description of the image

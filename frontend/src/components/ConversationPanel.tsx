@@ -1,12 +1,15 @@
 import { useRef, useEffect } from "react";
 import { Message, VoiceInfo, TtsEngine, OutputMode } from "../types";
 import { MessageItem } from "./MessageItem";
+import { StreamingBubble } from "./StreamingBubble";
+import { moodToEmoji } from "../mood";
 import { Theme } from "../theme";
 
 interface ConversationPanelProps {
   conversationHistory: Message[];
   userName: string;
   assistantName: string;
+  showLeftPanel: boolean;
   connected: boolean;
   ttsEngine: TtsEngine;
   outputMode: OutputMode;
@@ -19,7 +22,17 @@ interface ConversationPanelProps {
   showRealtimePanel: boolean;
   userCharacterImage: string | null;
   assistantCharacterImage: string | null;
+  assistantMood: string;
+  streamingText: string;
+  isStreaming: boolean;
+  formattingEnabled: boolean;
+  /** Reactive scene/mood gradient for the reading area (falls back to theme bg). */
+  ambient: string;
+  /** Cinematic reading mode — serif prose, wider column, calmer spacing. */
+  immersive: boolean;
   theme: Theme;
+  onToggleImmersive: () => void;
+  onToggleFormatting: (enabled: boolean) => void;
   onTtsEngineChange: (engine: TtsEngine) => void;
   onVoiceChange: (voice: string) => void;
   onToggleContext: (enabled: boolean) => void;
@@ -27,6 +40,7 @@ interface ConversationPanelProps {
   onClearChat: () => void;
   onStopAudio: () => void;
   onShowSettings: () => void;
+  onToggleLeftPanel: () => void;
   onToggleRealtimePanel: () => void;
   onEditMessage: (index: number) => void;
   onSaveEdit: (index: number) => void;
@@ -34,17 +48,18 @@ interface ConversationPanelProps {
   onDeleteMessage: (index: number) => void;
   onRewindToMessage: (index: number) => void;
   onResendMessage: () => void;
-  onRegenerateResponse: () => void;
+  onRegenerateResponse: (index: number) => void;
+  onSwipe: (index: number, direction: "left" | "right") => void;
   onPlayMessage: (text: string, index: number) => void;
   onEditingTextChange: (text: string) => void;
-  onShowUserCharacter: () => void;
-  onShowAssistantCharacter: () => void;
+  onShowLorebook: () => void;
 }
 
 export function ConversationPanel({
   conversationHistory,
   userName,
   assistantName,
+  showLeftPanel,
   connected,
   ttsEngine,
   outputMode,
@@ -57,7 +72,15 @@ export function ConversationPanel({
   showRealtimePanel,
   userCharacterImage,
   assistantCharacterImage,
+  assistantMood,
+  streamingText,
+  isStreaming,
+  formattingEnabled,
+  ambient,
+  immersive,
   theme,
+  onToggleImmersive,
+  onToggleFormatting,
   onTtsEngineChange,
   onVoiceChange,
   onToggleContext,
@@ -65,6 +88,7 @@ export function ConversationPanel({
   onClearChat,
   onStopAudio,
   onShowSettings,
+  onToggleLeftPanel,
   onToggleRealtimePanel,
   onEditMessage,
   onSaveEdit,
@@ -73,17 +97,17 @@ export function ConversationPanel({
   onRewindToMessage,
   onResendMessage,
   onRegenerateResponse,
+  onSwipe,
   onPlayMessage,
   onEditingTextChange,
-  onShowUserCharacter,
-  onShowAssistantCharacter
+  onShowLorebook
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or the reply streams in
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversationHistory]);
+  }, [conversationHistory, streamingText, isStreaming]);
 
   return (
     <>
@@ -95,67 +119,56 @@ export function ConversationPanel({
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button
+              onClick={onToggleLeftPanel}
+              title={showLeftPanel ? "Hide Left Panel" : "Show Left Panel"}
+              style={{
+                fontSize: 18,
+                padding: "6px 10px",
+                background: showLeftPanel ? theme.colors.buttonSecondary : theme.colors.secondary,
+                color: showLeftPanel ? theme.colors.textSecondary : "white",
+                border: "none",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "all 0.2s"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+            >
+              ☰
+            </button>
             <h3 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: theme.colors.textPrimary }}>
               💬 Conversation History
             </h3>
 
-            {/* Character Avatars */}
+            {/* Live assistant mood badge (character avatars live in the Cast bar) */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button
-                onClick={onShowUserCharacter}
-                title={`${userName}'s Character`}
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: "50%",
-                  border: `2px solid ${theme.colors.info}`,
-                  cursor: "pointer",
-                  overflow: "hidden",
-                  padding: 0,
-                  background: userCharacterImage ? "transparent" : theme.colors.primaryLight,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 18,
-                  transition: "transform 0.2s"
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.1)"}
-                onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
-              >
-                {userCharacterImage ? (
-                  <img src={userCharacterImage} alt={userName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  "👤"
-                )}
-              </button>
-
-              <button
-                onClick={onShowAssistantCharacter}
-                title={`${assistantName}'s Character`}
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: "50%",
-                  border: `2px solid ${theme.colors.success}`,
-                  cursor: "pointer",
-                  overflow: "hidden",
-                  padding: 0,
-                  background: assistantCharacterImage ? "transparent" : theme.colors.primaryLight,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 18,
-                  transition: "transform 0.2s"
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.1)"}
-                onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
-              >
-                {assistantCharacterImage ? (
-                  <img src={assistantCharacterImage} alt={assistantName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  "🤖"
-                )}
-              </button>
+              {/* Live mood badge for the assistant character */}
+              {assistantMood && (
+                <div
+                  title={`${assistantName} feels ${assistantMood}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    background: theme.colors.primaryLight,
+                    border: `1px solid ${theme.colors.border}`,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: theme.colors.textSecondary,
+                    whiteSpace: "nowrap",
+                    textTransform: "capitalize"
+                  }}
+                >
+                  <span style={{ fontSize: 15 }}>{moodToEmoji(assistantMood)}</span>
+                  {assistantMood}
+                </div>
+              )}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -238,6 +251,18 @@ export function ConversationPanel({
               <span style={{ fontWeight: 500, color: theme.colors.textPrimary }}>🖼️ ImageGen</span>
             </label>
 
+            {/* Rich roleplay formatting toggle */}
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer" }}
+              title="Style *actions* and &quot;dialogue&quot; in messages">
+              <input
+                type="checkbox"
+                checked={formattingEnabled}
+                onChange={(e) => onToggleFormatting(e.target.checked)}
+                style={{ cursor: "pointer" }}
+              />
+              <span style={{ fontWeight: 500, color: theme.colors.textPrimary }}>✨ Format</span>
+            </label>
+
             <button
               disabled={!connected}
               onClick={onClearChat}
@@ -283,8 +308,29 @@ export function ConversationPanel({
               🛑
             </button>
             <button
+              onClick={onShowLorebook}
+              title="Lorebook / Memory"
+              style={{
+                fontSize: 20,
+                padding: "6px 10px",
+                background: theme.colors.info,
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "opacity 0.2s"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+            >
+              📖
+            </button>
+            <button
               onClick={onShowSettings}
-              title="Character & System Prompt"
+              title="Story & System (global prompt, scenario, author's note)"
               style={{
                 fontSize: 20,
                 padding: "6px 10px",
@@ -301,7 +347,28 @@ export function ConversationPanel({
               onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
               onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
             >
-              🎭
+              📜
+            </button>
+            <button
+              onClick={onToggleImmersive}
+              title={immersive ? "Exit cinematic reading mode" : "Cinematic reading mode (serif prose, ambient scene backdrop, focused view)"}
+              style={{
+                fontSize: 18,
+                padding: "6px 10px",
+                background: immersive ? theme.colors.secondary : theme.colors.buttonSecondary,
+                color: immersive ? "white" : theme.colors.textSecondary,
+                border: "none",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "all 0.2s"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+            >
+              🎬
             </button>
             <button
               onClick={onToggleRealtimePanel}
@@ -328,13 +395,18 @@ export function ConversationPanel({
         </div>
       </div>
 
-      {/* Messages Container */}
+      {/* Messages Container — background reflects the current scene & mood */}
       <div style={{
         flex: 1,
         overflowY: "auto",
-        padding: "20px 24px",
-        background: theme.colors.background
+        padding: immersive ? "28px 24px" : "20px 24px",
+        background: ambient || theme.colors.background,
+        transition: "background 1.2s ease"
       }}>
+        <div style={{
+          maxWidth: immersive ? 900 : "none",
+          margin: immersive ? "0 auto" : undefined
+        }}>
         {conversationHistory.length === 0 ? (
           <div style={{
             textAlign: "center",
@@ -362,6 +434,8 @@ export function ConversationPanel({
                 editingMessage={editingMessage}
                 userCharacterImage={userCharacterImage}
                 assistantCharacterImage={assistantCharacterImage}
+                formattingEnabled={formattingEnabled}
+                immersive={immersive}
                 theme={theme}
                 onEdit={onEditMessage}
                 onSaveEdit={onSaveEdit}
@@ -370,13 +444,26 @@ export function ConversationPanel({
                 onRewind={onRewindToMessage}
                 onResend={onResendMessage}
                 onRegenerate={onRegenerateResponse}
+                onSwipe={onSwipe}
                 onPlay={onPlayMessage}
                 onEditingTextChange={onEditingTextChange}
               />
             ))}
+            {isStreaming && (
+              <StreamingBubble
+                assistantName={assistantName}
+                assistantCharacterImage={assistantCharacterImage}
+                text={streamingText}
+                mood={assistantMood}
+                formattingEnabled={formattingEnabled}
+                immersive={immersive}
+                theme={theme}
+              />
+            )}
             <div ref={messagesEndRef} />
           </>
         )}
+        </div>
       </div>
     </>
   );

@@ -16,15 +16,13 @@ from aiassistant.config import config
 from aiassistant.routes import (
     edit_image,
     explain_image,
-    generate_character_image,
     generate_image,
-    get_character_images,
     get_llm_models,
     get_model_status,
     get_voices,
     root,
     synthesize_tts,
-    upload_character_image,
+    wipe_data,
 )
 from aiassistant.utils import logger
 from aiassistant.websocket import ws_endpoint
@@ -35,7 +33,7 @@ _logger = logging.getLogger(__name__)
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,9 +49,7 @@ app.post("/api/tts")(synthesize_tts)
 app.post("/api/generate-image")(generate_image)
 app.post("/api/explain-image")(explain_image)
 app.post("/api/edit-image")(edit_image)
-app.post("/api/character/upload")(upload_character_image)
-app.post("/api/character/generate")(generate_character_image)
-app.get("/api/character/images")(get_character_images)
+app.post("/api/wipe")(wipe_data)
 app.websocket("/ws")(ws_endpoint)
 
 

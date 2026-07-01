@@ -50,6 +50,18 @@ class ConfigManager:
         """Initialize server and WebSocket configuration"""
         self.backend_host = os.getenv("BACKEND_HOST", "0.0.0.0")
         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
+        # Browser origins allowed to call the API cross-origin (CORS), comma-separated.
+        # Same-origin requests (the frontend served by this backend) never need CORS;
+        # this list only matters for cross-origin pages like the Vite dev server.
+        default_cors_origins = (
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:8000,http://127.0.0.1:8000"
+        )
+        self.cors_allow_origins = [
+            origin.strip()
+            for origin in os.getenv("CORS_ALLOW_ORIGINS", default_cors_origins).split(",")
+            if origin.strip()
+        ]
         self.ws_ping_interval = int(os.getenv("WS_PING_INTERVAL", "30"))
         self.ws_ping_timeout = int(os.getenv("WS_PING_TIMEOUT", "60"))
         self.ws_keepalive_timeout = int(os.getenv("WS_KEEPALIVE_TIMEOUT", "300"))
@@ -58,12 +70,15 @@ class ConfigManager:
         """Initialize LLM configuration"""
         self.llm_host = os.getenv("LLM_HOST", "http://localhost:11434")
         # or set cloud api for ollama https://ollama.com for cloud models
-        self.llm_model = os.getenv("LLM_MODEL", "glm-4.7:cloud")
+        self.llm_model = os.getenv("LLM_MODEL", "deepseek-v4-flash:cloud")
         # Ollama can run locally and use GPU/CPU
         self.llm_device = os.getenv("LLM_DEVICE", "auto")
         # auto, cuda, cpu
         # # Set to 0 to unload models immediately after requests (LOW_VRAM_MODE)
         self.llm_keep_alive = os.getenv("LLM_KEEP_ALIVE", "-1" if not self.low_vram_mode else "0")
+        self.output_mode = os.getenv("OUTPUT_MODE", "text").strip().lower()
+        if self.output_mode not in {"text", "voice"}:
+            self.output_mode = "text"
 
     def _init_whisper_config(self):
         """Initialize Whisper STT configuration"""
@@ -73,7 +88,7 @@ class ConfigManager:
 
     def _init_tts_config(self):
         """Initialize TTS engine configurations"""
-        self.tts_engine = os.getenv("TTS_ENGINE", "piper").lower()
+        self.tts_engine = os.getenv("TTS_ENGINE", "chatterbox").lower()
 
         # Piper TTS
         # voices are in two directory up from this config file
@@ -85,13 +100,14 @@ class ConfigManager:
 
         # ---------- Chatterbox TTS Configuration ----------
         # Model type: "turbo" (350M, fastest, supports tags), "standard" (500M English), or "multilingual" (500M, 23+ languages)
+        # Default to turbo for best compatibility across CPU-only environments.
         self.chatterbox_model_type = os.getenv("CHATTERBOX_MODEL_TYPE", "turbo").lower()
-        self.chatterbox_device = os.getenv("CHATTERBOX_DEVICE", "cuda")
+        self.chatterbox_device = os.getenv("CHATTERBOX_DEVICE", "cpu")
         self.chatterbox_ref_audio_dir = os.path.join(
             os.path.dirname(config_file_dir), "models", "voices", "chatterbox_refs"
         )
         # Default reference audio for voice cloning (optional - Chatterbox can work without it)
-        _default_ref_audio = os.path.join(self.chatterbox_ref_audio_dir, "Goat.wav")
+        _default_ref_audio = os.path.join(self.chatterbox_ref_audio_dir, "Brittney.mp3")
         self.chatterbox_default_ref_audio = os.getenv(
             "CHATTERBOX_DEFAULT_REF_AUDIO",
             _default_ref_audio if os.path.exists(_default_ref_audio) else "",
@@ -104,7 +120,7 @@ class ConfigManager:
         # ---------- Soprano TTS Configuration ----------
         # Backend: "auto" (default, uses LMDeploy if available), "lmdeploy", or "transformers"
         self.soprano_backend = os.getenv("SOPRANO_BACKEND", "auto").lower()
-        self.soprano_device = os.getenv("SOPRANO_DEVICE", "cuda")
+        self.soprano_device = os.getenv("SOPRANO_DEVICE", "cpu")
         # Local model directory for caching models
         self.soprano_model_dir = os.getenv(
             "SOPRANO_MODEL_DIR",
@@ -133,17 +149,30 @@ class ConfigManager:
 
     def _init_imagegen_config(self):
         """Initialize image generation configuration"""
-        self.imagegen_enabled = os.getenv("IMAGEGEN_ENABLED", "true").lower() == "true"
+        self.imagegen_enabled = os.getenv("IMAGEGEN_ENABLED", "false").lower() == "true"
         self.imagegen_model = os.getenv("IMAGEGEN_MODEL", "prompthero/openjourney")
         self.imagegen_model_type = os.getenv(
-            "IMAGEGEN_MODEL_TYPE", "diffusion"
-        )  # "diffusion" for now
-        self.imagegen_device = os.getenv("IMAGEGEN_DEVICE", "cuda")
+            "IMAGEGEN_MODEL_TYPE", "perchance"
+        )  # "diffusion" or "perchance"
+        self.imagegen_device = os.getenv("IMAGEGEN_DEVICE", "cpu")
         self.imagegen_width = int(os.getenv("IMAGEGEN_WIDTH", "768"))
         self.imagegen_height = int(os.getenv("IMAGEGEN_HEIGHT", "512"))
         self.imagegen_steps = int(os.getenv("IMAGEGEN_STEPS", "30"))
         self.imagegen_guidance = float(os.getenv("IMAGEGEN_GUIDANCE", "7.5"))
         self.imagegen_strength = float(os.getenv("IMAGEGEN_STRENGTH", "0.8"))
+
+        # Perchance image generation configuration
+        self.imagegen_perchance_generator = os.getenv(
+            "IMAGEGEN_PERCHANCE_GENERATOR", "ai-text-to-image-generator"
+        )
+        self.imagegen_perchance_api_url = os.getenv(
+            "IMAGEGEN_PERCHANCE_API_URL", "https://perchance.org/api/generateList.php"
+        )
+        self.imagegen_perchance_prompt_key = os.getenv("IMAGEGEN_PERCHANCE_PROMPT_KEY", "prompt")
+        self.imagegen_perchance_timeout_seconds = float(
+            os.getenv("IMAGEGEN_PERCHANCE_TIMEOUT_SECONDS", "60")
+        )
+        self.imagegen_perchance_extra_params = os.getenv("IMAGEGEN_PERCHANCE_EXTRA_PARAMS", "")
 
         # You can add LoRA Configuration as well on top of your base model
         self.imagegen_lora_enabled = os.getenv("IMAGEGEN_LORA_ENABLED", "false").lower() == "true"
@@ -156,14 +185,12 @@ class ConfigManager:
 
     def _init_imageexplainer_config(self):
         """Initialize image explainer configuration
-        1. better vram use 4B uncensored: "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
-                                          "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-uncensored"
-        2. lower vram use 2B abliterated: "huihui-ai/Huihui-Qwen3-VL-2B-Thinking-abliterated"
-                                          "huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated"
+        1. if you have more vram, use the 4B model: "Qwen/Qwen3-VL-4B-Instruct"
+        2. for lower vram, use the 2B model: "Qwen/Qwen3-VL-2B-Instruct"
         """
         self.imageexplainer_enabled = os.getenv("IMAGEEXPLAINER_ENABLED", "true").lower() == "true"
         self.imageexplainer_model = os.getenv(
-            "IMAGEEXPLAINER_MODEL", "huihui-ai/Huihui-Qwen3-VL-2B-Instruct-abliterated"
+            "IMAGEEXPLAINER_MODEL", "Qwen/Qwen3-VL-2B-Instruct"
         )
         self.imageexplainer_device = os.getenv("IMAGEEXPLAINER_DEVICE", "auto")
         self.imageexplainer_max_tokens = int(os.getenv("IMAGEEXPLAINER_MAX_TOKENS", "256"))

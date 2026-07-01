@@ -256,7 +256,8 @@ class EngineManager:
                 "loaded": generator_device_info["loaded"],
                 "memory_mb": generator_device_info["memory_allocated_mb"],
             }
-            if self.image_generator.lora_path:
+            lora_path = getattr(self.image_generator, "lora_path", None)
+            if lora_path:
                 generator_info["lora"] = True
             status["models"]["image_generator"] = generator_info
 

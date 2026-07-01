@@ -18,5 +18,7 @@
         ".venv": true,
         ".pytest_cache": true,
         "**/__pycache__": true
-    }
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "python-envs.pythonProjects": []
 }

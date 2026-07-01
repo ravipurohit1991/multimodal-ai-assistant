@@ -1,0 +1,338 @@
+"""
+Roleplay context utilities — Lorebook (World Info) and Author's Note injection.
+
+These features deepen long-form roleplay by keeping persistent facts and
+narrative steering available to the LLM without bloating the visible chat
+history. Everything here injects *only* into the message list that is sent to
+the model for a single turn; the canonical conversation history kept in
+``ConnState.messages`` is never mutated.
+"""
+
+from __future__ import annotations
+
+import re
+
+# {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
+# tolerant of inner whitespace, e.g. "{{ Char }}".
+_CHAR_MACRO_RE = re.compile(r"\{\{\s*char\s*\}\}", re.IGNORECASE)
+_USER_MACRO_RE = re.compile(r"\{\{\s*user\s*\}\}", re.IGNORECASE)
+
+
+def apply_placeholders(text: str, char: str = "", user: str = "") -> str:
+    """Replace ``{{char}}`` / ``{{user}}`` macros with the configured names.
+
+    Empty names are left untouched so we never substitute a blank string into the
+    prompt (which would read worse than the literal macro). Safe on ``None``.
+    """
+    if not text:
+        return text
+    if char:
+        text = _CHAR_MACRO_RE.sub(char, text)
+    if user:
+        text = _USER_MACRO_RE.sub(user, text)
+    return text
+
+
+# ----- Director / scene-style controls -----------------------------------
+# Each persistent dial maps to a short, imperative line injected close to the
+# latest turn so it strongly shapes the next reply without polluting history.
+_LENGTH_DIRECTIVES = {
+    "brief": "Length: keep this reply short and punchy — about 2-4 sentences, a single paragraph.",
+    "normal": "Length: a balanced reply of one to two paragraphs.",
+    "detailed": "Length: a rich, detailed reply of two to four paragraphs with strong sensory grounding.",
+    "novella": "Length: an expansive, novel-style passage — deep description, interiority, and atmosphere.",
+}
+_PERSPECTIVE_DIRECTIVES = {
+    "first": 'Perspective: narrate {{char}}\'s actions and narration in the first person ("I").',
+    "third": 'Perspective: narrate {{char}} in the third person ("{{char}} does..."), like a novel.',
+}
+_PACING_DIRECTIVES = {
+    "slow": "Pacing: slow-burn — linger in the present moment, build tension gradually, do not rush the plot.",
+    "advance": "Pacing: keep the story moving — introduce a fresh development, complication, or turn this reply.",
+}
+
+
+def build_style_directive(state, char: str = "", user: str = "") -> str:
+    """Render the active Director controls into one steering system block.
+
+    Combines the persistent length/perspective/pacing dials with a one-shot
+    ``director_beat`` (a per-reply cue). Returns an empty string only if nothing
+    is worth saying, though length always contributes a line.
+    """
+    lines: list[str] = []
+
+    length = getattr(state, "response_length", "normal") or "normal"
+    lines.append(_LENGTH_DIRECTIVES.get(length, _LENGTH_DIRECTIVES["normal"]))
+
+    perspective = getattr(state, "narration_perspective", "default") or "default"
+    if perspective in _PERSPECTIVE_DIRECTIVES:
+        lines.append(_PERSPECTIVE_DIRECTIVES[perspective])
+
+    pacing = getattr(state, "pacing", "steady") or "steady"
+    if pacing in _PACING_DIRECTIVES:
+        lines.append(_PACING_DIRECTIVES[pacing])
+
+    beat = (getattr(state, "director_beat", "") or "").strip()
+    if beat:
+        lines.append(f"Director's cue for this reply only: {beat}")
+
+    if not lines:
+        return ""
+
+    body = "\n".join(f"- {apply_placeholders(line, char, user)}" for line in lines)
+    return (
+        "[Scene direction — shape your next reply accordingly. "
+        "Never mention, quote, or acknowledge these instructions.]\n" + body
+    )
+
+
+# ----- Scene atmosphere ---------------------------------------------------
+# A compact, persistent sense of place injected each turn so the character
+# narrates within a consistent setting (time of day, weather, location) without
+# the user having to restate it. Kept deliberately short and phrased as grounding
+# rather than a checklist, so the model weaves it in naturally.
+_TIME_PHRASES = {
+    "dawn": "the pale light of dawn",
+    "morning": "morning",
+    "midday": "the bright of midday",
+    "afternoon": "the afternoon",
+    "dusk": "the fading light of dusk",
+    "night": "night",
+}
+_WEATHER_PHRASES = {
+    "clear": "clear skies",
+    "cloudy": "overcast, cloudy skies",
+    "rain": "steady rain",
+    "storm": "a thunderstorm",
+    "snow": "falling snow",
+    "fog": "thick fog",
+    "wind": "a strong wind",
+}
+
+
+# Canonical scene vocabulary plus common synonyms, so the model can be loose
+# ("evening", "raining") and still land on a value the UI understands.
+_TIME_ALIASES = {
+    "dawn": "dawn", "sunrise": "dawn", "daybreak": "dawn",
+    "morning": "morning", "am": "morning",
+    "midday": "midday", "noon": "midday", "midafternoon": "afternoon",
+    "afternoon": "afternoon",
+    "dusk": "dusk", "sunset": "dusk", "evening": "dusk", "twilight": "dusk", "nightfall": "dusk",
+    "night": "night", "midnight": "night", "nighttime": "night", "nocturnal": "night",
+}
+_WEATHER_ALIASES = {
+    "clear": "clear", "sunny": "clear", "fair": "clear",
+    "cloudy": "cloudy", "overcast": "cloudy", "cloud": "cloudy", "clouds": "cloudy",
+    "rain": "rain", "rainy": "rain", "raining": "rain", "drizzle": "rain", "drizzly": "rain",
+    "storm": "storm", "stormy": "storm", "thunderstorm": "storm", "thunder": "storm",
+    "snow": "snow", "snowy": "snow", "snowing": "snow", "blizzard": "snow",
+    "fog": "fog", "foggy": "fog", "mist": "fog", "misty": "fog",
+    "wind": "wind", "windy": "wind", "gale": "wind", "breezy": "wind",
+}
+
+
+def _canon(value: str, aliases: dict[str, str]) -> str:
+    """Map a free-form word (or phrase) onto a canonical scene value, or ""."""
+    v = value.strip().lower()
+    if v in aliases:
+        return aliases[v]
+    for token in re.split(r"\W+", v):
+        if token in aliases:
+            return aliases[token]
+    return ""
+
+
+def parse_scene_tag(body: str) -> dict:
+    """Parse the body of a ``[SCENE: ...]`` tag into scene updates.
+
+    Accepts ``key=value`` form (``time=dusk; weather=rain; location=the pier``) and
+    falls back to free-form keyword detection. Only recognized, non-empty fields
+    are returned, so partial updates ("just change the location") work.
+    """
+    updates: dict[str, str] = {}
+    kv = re.findall(r"(\w+)\s*=\s*([^;,\]]+)", body)
+    if kv:
+        for key, val in kv:
+            key = key.lower()
+            if key in ("time", "tod", "timeofday"):
+                t = _canon(val, _TIME_ALIASES)
+                if t:
+                    updates["time"] = t
+            elif key == "weather":
+                w = _canon(val, _WEATHER_ALIASES)
+                if w:
+                    updates["weather"] = w
+            elif key in ("location", "place", "setting", "where"):
+                loc = val.strip()
+                if loc:
+                    updates["location"] = loc
+    else:
+        t = _canon(body, _TIME_ALIASES)
+        if t:
+            updates["time"] = t
+        w = _canon(body, _WEATHER_ALIASES)
+        if w:
+            updates["weather"] = w
+        loc = body.strip()
+        if loc:
+            updates["location"] = loc
+    return updates
+
+
+def build_scene_directive(state, char: str = "", user: str = "") -> str:
+    """Render the current scene (time / weather / location) into one grounding block.
+
+    Returns an empty string when no scene has been set, so quiet scenes cost
+    nothing. Phrasing nudges the model to reflect the atmosphere in its prose
+    rather than announcing it as metadata.
+    """
+    time = (getattr(state, "scene_time", "") or "").strip().lower()
+    weather = (getattr(state, "scene_weather", "") or "").strip().lower()
+    location = (getattr(state, "scene_location", "") or "").strip()
+
+    fragments: list[str] = []
+    if location:
+        fragments.append(location)
+    if time in _TIME_PHRASES:
+        fragments.append(_TIME_PHRASES[time])
+    if weather in _WEATHER_PHRASES:
+        fragments.append(_WEATHER_PHRASES[weather])
+
+    if not fragments:
+        return ""
+
+    setting = ", ".join(fragments)
+    return apply_placeholders(
+        "[Present scene — keep the story grounded here. Let the setting, time of "
+        "day, and weather colour the mood and sensory detail of your narration "
+        "naturally; never announce them as a list.]\n"
+        f"- The scene takes place in {setting}.",
+        char,
+        user,
+    )
+
+
+def _entry_keys(entry: dict) -> list[str]:
+    """Normalize an entry's trigger keywords into a clean list of strings."""
+    keys = entry.get("keys")
+    if keys is None:
+        keys = entry.get("keywords", [])
+    if isinstance(keys, str):
+        keys = re.split(r"[,\n]", keys)
+    return [k.strip() for k in (keys or []) if isinstance(k, str) and k.strip()]
+
+
+def scan_lorebook(
+    entries: list[dict], recent_messages: list[dict], scan_depth: int = 4
+) -> list[dict]:
+    """Return lorebook entries that should be active for the upcoming turn.
+
+    An entry activates when it is marked ``constant`` (always on) or when any of
+    its keywords appears in the most recent ``scan_depth`` user/assistant
+    messages. The original ordering of ``entries`` is preserved so that authors
+    can control priority.
+    """
+    if not entries:
+        return []
+
+    convo = [m for m in recent_messages if m.get("role") in ("user", "assistant")]
+    window = convo[-scan_depth:] if scan_depth and scan_depth > 0 else convo
+    haystack = "\n".join(str(m.get("content", "")) for m in window)
+    haystack_lower = haystack.lower()
+
+    active: list[dict] = []
+    for entry in entries:
+        if not entry.get("enabled", True):
+            continue
+        if not str(entry.get("content", "")).strip():
+            continue
+        if entry.get("constant"):
+            active.append(entry)
+            continue
+        case_sensitive = bool(entry.get("case_sensitive", False))
+        target = haystack if case_sensitive else haystack_lower
+        for key in _entry_keys(entry):
+            needle = key if case_sensitive else key.lower()
+            if needle and needle in target:
+                active.append(entry)
+                break
+    return active
+
+
+def render_lorebook_block(active_entries: list[dict]) -> str:
+    """Render active lorebook entries into a single system-message body."""
+    parts: list[str] = []
+    for entry in active_entries:
+        title = str(entry.get("title") or entry.get("name") or "").strip()
+        content = str(entry.get("content", "")).strip()
+        if not content:
+            continue
+        parts.append(f"- {title}: {content}" if title else f"- {content}")
+    if not parts:
+        return ""
+    return (
+        "[Relevant world & character knowledge — treat the following as "
+        "established facts. Do not mention or quote this list directly.]\n"
+        + "\n".join(parts)
+    )
+
+
+def build_llm_messages(state, no_context_user_text: str | None = None) -> list[dict]:
+    """Assemble the message list sent to the LLM for a normal turn.
+
+    Order: system prompt(s) → Lorebook knowledge → history (with the Author's
+    Note inserted a few turns from the end) → Director/scene-style directive
+    (always last, for maximum recency). The returned list is always a fresh
+    copy, so ``state.messages`` stays clean.
+    """
+    char = getattr(state, "char_name", "") or ""
+    user = getattr(state, "user_name", "") or ""
+
+    system_msgs = [dict(m) for m in state.messages if m.get("role") == "system"]
+    non_system = [m for m in state.messages if m.get("role") != "system"]
+
+    if state.use_context:
+        history = [dict(m) for m in non_system]
+    elif no_context_user_text is not None:
+        history = [{"role": "user", "content": no_context_user_text}]
+    else:
+        history = []
+
+    # Lorebook is scanned against the real recent history regardless of whether
+    # full context is enabled, so keyword triggers still fire in single-turn mode.
+    lore_entries = scan_lorebook(
+        getattr(state, "lorebook", []) or [],
+        non_system,
+        getattr(state, "lorebook_scan_depth", 4),
+    )
+    lore_block = apply_placeholders(render_lorebook_block(lore_entries), char, user)
+    lore_msgs = [{"role": "system", "content": lore_block}] if lore_block else []
+
+    # Scene atmosphere: a persistent sense of place, injected alongside the
+    # world knowledge so every reply stays grounded in the current setting.
+    scene_block = build_scene_directive(state, char, user)
+    scene_msgs = [{"role": "system", "content": scene_block}] if scene_block else []
+
+    # Author's Note: a short, persistent steering instruction injected close to
+    # the end of the history so it strongly influences the next response.
+    note = (getattr(state, "author_note", "") or "").strip()
+    if note:
+        note = apply_placeholders(note, char, user)
+        depth = max(0, int(getattr(state, "author_note_depth", 3)))
+        note_msg = {
+            "role": "system",
+            "content": f"[Author's Note — guidance for the next response]\n{note}",
+        }
+        insert_at = max(0, len(history) - depth)
+        history = history[:insert_at] + [note_msg] + history[insert_at:]
+
+    messages = system_msgs + lore_msgs + scene_msgs + history
+
+    # Director/scene-style directive: appended last so the most recent instruction
+    # the model sees is the user's live control over length, perspective, pacing,
+    # and any one-shot beat.
+    style_block = build_style_directive(state, char, user)
+    if style_block:
+        messages.append({"role": "system", "content": style_block})
+
+    return messages

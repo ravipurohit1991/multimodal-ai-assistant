@@ -73,6 +73,9 @@ dependencies = [
     "python-multipart",
     "nvidia-ml-py",  # pynvml for GPU monitoring (like nvtop)
     "psutil",  # System resource monitoring
+
+    # reupgrade, once installattion is complete
+    # "peft", # lmdeploy requires less than 0.11.1 but we need higher version for qwen3vl-7b
 ]
 
 [project.optional-dependencies]
@@ -132,3 +135,5 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

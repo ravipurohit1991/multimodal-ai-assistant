@@ -55,6 +55,7 @@ class ChatterboxTTS(TTSEngine):
         self.model = None
         self._available_voices = []
         self._model_sample_rate = None
+        self._conditioning_enabled = True
 
         print(f"Initializing Chatterbox TTS: {model_type} on {device}")
         self._load_model()
@@ -73,6 +74,60 @@ class ChatterboxTTS(TTSEngine):
             self.load_voice(self._available_voices[0])
             print(f"Auto-loaded first available voice: {self._available_voices[0]}")
 
+    def _apply_dtype_workarounds(self) -> None:
+        """Normalize known Chatterbox internals to float32 for CPU compatibility."""
+        if self.model is None:
+            return
+
+        visited: set[int] = set()
+        stack: list[tuple[object, int]] = [(self.model, 0)]
+        max_depth = 4
+        patched_paths: list[str] = []
+
+        child_attrs = (
+            "s3gen",
+            "s3_tokzr",
+            "s3tokenizer",
+            "tokenizer",
+            "t3",
+            "ve",
+            "encoder",
+            "decoder",
+            "model",
+        )
+
+        while stack:
+            current, depth = stack.pop()
+            obj_id = id(current)
+            if obj_id in visited or depth > max_depth:
+                continue
+            visited.add(obj_id)
+
+            try:
+                mel_filters = getattr(current, "_mel_filters", None)
+                if torch.is_tensor(mel_filters) and mel_filters.dtype != torch.float32:
+                    setattr(current, "_mel_filters", mel_filters.float())
+                    patched_paths.append(type(current).__name__)
+            except Exception:
+                pass
+
+            if depth == max_depth:
+                continue
+
+            for attr_name in child_attrs:
+                try:
+                    child = getattr(current, attr_name, None)
+                except Exception:
+                    child = None
+                if child is not None:
+                    stack.append((child, depth + 1))
+
+        if patched_paths:
+            print(
+                "Applied Chatterbox dtype workaround (_mel_filters -> float32) on: "
+                + ", ".join(sorted(set(patched_paths)))
+            )
+
     def _load_model(self):
         """Load the appropriate Chatterbox model"""
         try:
@@ -81,6 +136,7 @@ class ChatterboxTTS(TTSEngine):
 
                 self.model = ChatterboxTurboTTS.from_pretrained(device=self.device)
                 self._model_sample_rate = self.model.sr
+                self._apply_dtype_workarounds()
                 print(f"Chatterbox Turbo loaded successfully on {self.device}!")
                 print(f"   Sample rate: {self._model_sample_rate}Hz")
 
@@ -89,6 +145,7 @@ class ChatterboxTTS(TTSEngine):
 
                 self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)  # type: ignore
                 self._model_sample_rate = self.model.sr
+                self._apply_dtype_workarounds()
                 print(f"Chatterbox Multilingual loaded successfully on {self.device}!")
                 print(f"   Sample rate: {self._model_sample_rate}Hz")
 
@@ -97,6 +154,7 @@ class ChatterboxTTS(TTSEngine):
 
                 self.model = ChatterboxStandardTTS.from_pretrained(device=self.device)
                 self._model_sample_rate = self.model.sr
+                self._apply_dtype_workarounds()
                 print(f"Chatterbox Standard loaded successfully on {self.device}!")
                 print(f"   Sample rate: {self._model_sample_rate}Hz")
 
@@ -111,6 +169,21 @@ class ChatterboxTTS(TTSEngine):
             print(f"   Error: {e}")
             raise
         except Exception as e:
+            if (
+                self.model_type in {"standard", "multilingual"}
+                and str(e) == "'NoneType' object is not callable"
+            ):
+                pkg_resources_available = True
+                try:
+                    import pkg_resources  # noqa: F401
+                except Exception:
+                    pkg_resources_available = False
+
+                if not pkg_resources_available:
+                    print("Detected Chatterbox dependency issue: missing pkg_resources")
+                    print("   This usually happens with setuptools>=81.")
+                    print('   Fix: pip install "setuptools<81"')
+
             print(f"Error loading Chatterbox model: {e}")
             import traceback
 
@@ -168,6 +241,7 @@ class ChatterboxTTS(TTSEngine):
         print(f"Loading Chatterbox voice: {voice_name}")
         self.current_ref_audio = str(ref_audio_path)
         self.current_voice_name = voice_name
+        self._conditioning_enabled = True
 
         if voice_name not in self._available_voices:
             self._available_voices.append(voice_name)
@@ -205,52 +279,80 @@ class ChatterboxTTS(TTSEngine):
 
         # Get parameters
         audio_prompt_path = kwargs.get("audio_prompt_path", self.current_ref_audio)
+        if not self._conditioning_enabled:
+            audio_prompt_path = None
         exaggeration = kwargs.get("exaggeration", self.exaggeration)
         cfg_weight = kwargs.get("cfg_weight", self.cfg_weight)
 
         try:
-            # Generate audio based on model type
-            if self.model_type == "turbo":
-                # Turbo model doesn't use exaggeration/cfg_weight
-                if audio_prompt_path:
-                    wav = self.model.generate(text, audio_prompt_path=audio_prompt_path)  # type: ignore
-                else:
-                    wav = self.model.generate(text)  # type: ignore
+            wav = None
+            for attempt in range(3):
+                try:
+                    # Generate audio based on model type
+                    if self.model_type == "turbo":
+                        # Turbo model doesn't use exaggeration/cfg_weight
+                        if audio_prompt_path:
+                            wav = self.model.generate(text, audio_prompt_path=audio_prompt_path)  # type: ignore
+                        else:
+                            wav = self.model.generate(text)  # type: ignore
 
-            elif self.model_type == "multilingual":
-                # Multilingual model requires language_id
-                if not language_id:
-                    language_id = "en"  # Default to English
+                    elif self.model_type == "multilingual":
+                        # Multilingual model requires language_id
+                        if not language_id:
+                            language_id = "en"  # Default to English
 
-                if audio_prompt_path:
-                    wav = self.model.generate(
-                        text,
-                        language_id=language_id,  # type: ignore
-                        audio_prompt_path=audio_prompt_path,
-                        exaggeration=exaggeration,
-                        cfg_weight=cfg_weight,
-                    )
-                else:
-                    wav = self.model.generate(
-                        text,
-                        language_id=language_id,  # type: ignore
-                        exaggeration=exaggeration,
-                        cfg_weight=cfg_weight,
-                    )
+                        if audio_prompt_path:
+                            wav = self.model.generate(
+                                text,
+                                language_id=language_id,  # type: ignore
+                                audio_prompt_path=audio_prompt_path,
+                                exaggeration=exaggeration,
+                                cfg_weight=cfg_weight,
+                            )
+                        else:
+                            wav = self.model.generate(
+                                text,
+                                language_id=language_id,  # type: ignore
+                                exaggeration=exaggeration,
+                                cfg_weight=cfg_weight,
+                            )
 
-            else:  # standard
-                # Standard model supports exaggeration and cfg_weight
-                if audio_prompt_path:
-                    wav = self.model.generate(  # type: ignore
-                        text,
-                        audio_prompt_path=audio_prompt_path,
-                        exaggeration=exaggeration,
-                        cfg_weight=cfg_weight,
+                    else:  # standard
+                        # Standard model supports exaggeration and cfg_weight
+                        if audio_prompt_path:
+                            wav = self.model.generate(  # type: ignore
+                                text,
+                                audio_prompt_path=audio_prompt_path,
+                                exaggeration=exaggeration,
+                                cfg_weight=cfg_weight,
+                            )
+                        else:
+                            wav = self.model.generate(  # type: ignore
+                                text, exaggeration=exaggeration, cfg_weight=cfg_weight
+                            )
+                    break
+                except RuntimeError as runtime_error:
+                    dtype_error = "expected scalar type Double but found Float" in str(
+                        runtime_error
                     )
-                else:
-                    wav = self.model.generate(  # type: ignore
-                        text, exaggeration=exaggeration, cfg_weight=cfg_weight
-                    )
+                    if attempt == 0 and dtype_error:
+                        print(
+                            "Detected Chatterbox dtype mismatch. Applying workaround and retrying..."
+                        )
+                        self._apply_dtype_workarounds()
+                        continue
+                    if attempt == 1 and dtype_error and audio_prompt_path:
+                        print(
+                            "Chatterbox conditioning failed due to dtype mismatch. "
+                            "Retrying without reference audio for this utterance."
+                        )
+                        self._conditioning_enabled = False
+                        audio_prompt_path = None
+                        continue
+                    raise
+
+            if wav is None:
+                raise RuntimeError("Chatterbox generation failed: no audio produced")
 
             # Convert tensor to numpy if needed
             if torch.is_tensor(wav):
@@ -295,6 +397,7 @@ class ChatterboxTTS(TTSEngine):
             "model_type": self.model_type,
             "current_voice": self.current_voice_name,
             "current_ref_audio": self.current_ref_audio,
+            "conditioning_enabled": self._conditioning_enabled,
             "ref_audio_dir": str(self.ref_audio_dir) if self.ref_audio_dir else None,
             "available_voices": self._available_voices,
             "sample_rate": self.target_sample_rate,

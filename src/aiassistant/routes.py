@@ -2,18 +2,17 @@
 REST API Routes - HTTP endpoints for the TTS/STT pipeline
 """
 
-import glob
 import os
 from datetime import datetime
 
-from fastapi import Body, File, Form, UploadFile
+from fastapi import Body, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from PIL import Image
 
 from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
-from aiassistant.utils import image_to_base64, logger
+from aiassistant.utils import image_to_base64, logger, wipe_user_data
 
 
 async def root():
@@ -29,6 +28,25 @@ async def root():
             "model_status": "/api/model-status",
         },
     }
+
+
+async def wipe_data(request: Request):
+    """Erase all on-disk user data — saved/generated images, uploaded characters,
+    and log files — so no trace remains. Works independently of any WebSocket."""
+    # The custom header forces a CORS preflight for cross-origin callers, so a
+    # malicious web page can't fire this destructive request via drive-by CSRF.
+    if request.headers.get("x-wipe-confirm") != "yes":
+        return JSONResponse(
+            content={"success": False, "error": "Missing X-Wipe-Confirm: yes header"},
+            status_code=403,
+        )
+    try:
+        summary = wipe_user_data(clear_logs=True)
+        logger.info(f"Wipe (HTTP) complete: {summary}")
+        return JSONResponse(content={"success": True, "summary": summary})
+    except Exception as e:
+        logger.error(f"Wipe (HTTP) failed: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 
 async def get_model_status():
@@ -201,144 +219,6 @@ async def explain_image(file: UploadFile = File(...)):
 
     except Exception as e:
         logger.error(f"Image explanation error: {e}", exc_info=True)
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-async def upload_character_image(
-    file: UploadFile = File(...),
-    character_type: str = Form(...),
-):
-    """Upload a character image for user or assistant"""
-    try:
-        if character_type not in ["user", "assistant"]:
-            return JSONResponse(
-                content={"error": "character_type must be 'user' or 'assistant'"}, status_code=400
-            )
-
-        # Save the uploaded file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_extension = os.path.splitext(file.filename or "image.png")[1] or ".png"
-        filename = f"{character_type}_{timestamp}{file_extension}"
-        file_path = os.path.join(config.user_characters_dir, filename)
-
-        # Write file
-        content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
-
-        logger.info(f"Character image saved to: {file_path}")
-
-        # Convert to base64 for immediate return
-        image = Image.open(file_path)
-        img_base64 = image_to_base64(image)
-
-        return JSONResponse(
-            content={
-                "success": True,
-                "character_type": character_type,
-                "filename": filename,
-                "path": file_path,
-                "image": img_base64,
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Character image upload error: {e}", exc_info=True)
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-async def generate_character_image(
-    character_type: str = Body(..., embed=True),  # "user" or "assistant"
-    description: str = Body(..., embed=True),
-    width: int = Body(512, embed=True),
-    height: int = Body(768, embed=True),
-    steps: int = Body(config.imagegen_steps, embed=True),
-    guidance: float = Body(config.imagegen_guidance, embed=True),
-):
-    """Generate a character image from a text description"""
-    if engine_manager.image_generator is None:
-        return JSONResponse(content={"error": "Image generation not available"}, status_code=503)
-
-    try:
-        if character_type not in ["user", "assistant"]:
-            return JSONResponse(
-                content={"error": "character_type must be 'user' or 'assistant'"}, status_code=400
-            )
-
-        # Initialize generator if needed
-        if not engine_manager.image_generator._initialized:
-            logger.info("Initializing image generator...")
-            engine_manager.image_generator.initialize()
-
-        # Generate portrait-style image
-        prompt = f"{description}, high quality, detailed"
-        logger.info(f"Generating {character_type} character image: {prompt[:100]}...")
-
-        image = await engine_manager.image_generator.generate(
-            scene_prompt=prompt,
-            include_character=False,  # Don't use existing character description
-            num_inference_steps=steps,
-            guidance_scale=guidance,
-            width=width,
-            height=height,
-        )
-
-        # Save the generated image
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{character_type}_generated_{timestamp}.png"
-        file_path = os.path.join(config.user_characters_dir, filename)
-        image.save(file_path)
-
-        logger.info(f"Character image saved to: {file_path}")
-
-        # Convert to base64
-        img_base64 = image_to_base64(image)
-
-        # Unload model in low VRAM mode
-        if config.low_vram_mode:
-            engine_manager.unload_image_generator()
-
-        return JSONResponse(
-            content={
-                "success": True,
-                "character_type": character_type,
-                "filename": filename,
-                "path": file_path,
-                "image": img_base64,
-                "description": description,
-                "prompt": prompt,
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Character image generation error: {e}", exc_info=True)
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-async def get_character_images():
-    """Get current character images for user and assistant"""
-    try:
-        result: dict[str, dict[str, str] | None] = {"user": None, "assistant": None}
-
-        # Find latest images for each character type
-        for char_type in ["user", "assistant"]:
-            pattern = os.path.join(config.user_characters_dir, f"{char_type}_*.png")
-            files = glob.glob(pattern)
-            if files:
-                # Get the most recent file
-                latest_file = max(files, key=os.path.getctime)
-                image = Image.open(latest_file)
-                img_base64 = image_to_base64(image)
-                result[char_type] = {
-                    "filename": os.path.basename(latest_file),
-                    "path": latest_file,
-                    "image": img_base64,
-                }
-
-        return JSONResponse(content=result)
-
-    except Exception as e:
-        logger.error(f"Error getting character images: {e}", exc_info=True)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 

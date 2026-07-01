@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import AsyncGenerator
 
 import httpx
@@ -18,7 +19,7 @@ class OllamaClient(LLMEngine):
     def __init__(
         self,
         host: str,
-        default_model: str = "glm-4.7:cloud",
+        default_model: str = "deepseek-v4-flash:cloud",
         device: str = "auto",
         keep_alive: str = "5m",
     ):
@@ -54,31 +55,130 @@ class OllamaClient(LLMEngine):
         """
         url = f"{self.host}/api/chat"
         headers = {}
+        requested_model = model or self.default_model
+        attempted_models: set[str] = set()
+        candidate_models = [requested_model]
 
-        payload = {
-            "model": model or self.default_model,
-            "messages": messages,
-            "stream": True,
-            "keep_alive": self.keep_alive,
-        }
+        while candidate_models:
+            current_model = candidate_models.pop(0)
+            if current_model in attempted_models:
+                continue
+            attempted_models.add(current_model)
 
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+            payload = {
+                "model": current_model,
+                "messages": messages,
+                "stream": True,
+                "keep_alive": self.keep_alive,
+            }
 
-                    # Ollama chat streaming returns partial message content
-                    if obj.get("message") and obj["message"].get("content"):
-                        yield obj["message"]["content"]
+            try:
+                async with httpx.AsyncClient(timeout=None) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as r:
+                        if r.is_error:
+                            error_text = await self._extract_error_text(r)
+                            model_missing = self._is_model_not_found_error(
+                                r.status_code, error_text
+                            )
 
-                    if obj.get("done"):
-                        break
+                            if model_missing:
+                                fallback_model = await self._pick_fallback_model(current_model)
+                                if fallback_model and fallback_model not in attempted_models:
+                                    logger.warning(
+                                        f"LLM model '{current_model}' not found on {self.host}. "
+                                        f"Retrying with '{fallback_model}'."
+                                    )
+                                    candidate_models.append(fallback_model)
+                                    continue
+
+                            detail = f"{r.status_code} for {url}"
+                            if error_text:
+                                detail = f"{detail}: {error_text}"
+                            raise RuntimeError(f"LLM request failed ({current_model}) - {detail}")
+
+                        async for line in r.aiter_lines():
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+
+                            # Ollama chat streaming returns partial message content
+                            if obj.get("message") and obj["message"].get("content"):
+                                yield obj["message"]["content"]
+
+                            if obj.get("done"):
+                                break
+
+                # Successful completion; do not try more candidates.
+                return
+
+            except Exception:
+                # Preserve original traceback for non-HTTP errors.
+                raise
+
+    async def _extract_error_text(self, response: httpx.Response | None) -> str:
+        """Extract readable error text from Ollama/OpenAI-compatible error payloads."""
+        if response is None:
+            return ""
+
+        try:
+            raw_content = await response.aread()
+        except Exception:
+            return ""
+
+        if not raw_content:
+            return ""
+
+        try:
+            data = json.loads(raw_content)
+            if isinstance(data, dict):
+                if isinstance(data.get("error"), str):
+                    return data["error"]
+                if isinstance(data.get("error"), dict):
+                    return str(data["error"].get("message", ""))
+            return raw_content.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return raw_content.decode("utf-8", errors="replace").strip()
+
+    def _is_model_not_found_error(self, status_code: int, error_text: str) -> bool:
+        """Return True when response indicates requested model does not exist."""
+        if status_code != 404:
+            return False
+        err = (error_text or "").lower()
+        return "model" in err and "not found" in err
+
+    async def _pick_fallback_model(self, requested_model: str) -> str | None:
+        """Pick a sensible fallback model from available Ollama tags."""
+        available_models = await self.list_models()
+        if not available_models:
+            return None
+
+        requested_lower = requested_model.lower()
+
+        # Prefer newer cloud GLM models when a cloud GLM model was requested.
+        if "glm" in requested_lower and ":cloud" in requested_lower:
+            cloud_glm = [
+                m for m in available_models if "glm" in m.lower() and ":cloud" in m.lower()
+            ]
+            if cloud_glm:
+                cloud_glm.sort(key=lambda name: self._model_sort_key(name), reverse=True)
+                return cloud_glm[0]
+
+        # Prefer same family/tag prefix if possible.
+        prefix = requested_model.split(":", 1)[0].strip().lower()
+        same_family = [m for m in available_models if m.split(":", 1)[0].strip().lower() == prefix]
+        if same_family:
+            same_family.sort(key=lambda name: self._model_sort_key(name), reverse=True)
+            return same_family[0]
+
+        return available_models[0]
+
+    def _model_sort_key(self, model_name: str) -> tuple[int, ...]:
+        """Build a sortable numeric key from a model name (e.g. glm-4.7:cloud)."""
+        nums = [int(n) for n in re.findall(r"\d+", model_name)]
+        return tuple(nums) if nums else (0,)
 
     async def list_models(self) -> list[str]:
         """
