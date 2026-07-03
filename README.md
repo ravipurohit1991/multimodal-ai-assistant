@@ -34,12 +34,15 @@ Here is the app running with demo conversation data, showing the local model con
 
 ### **Immersive Roleplay & Storytelling**
 - **Multiple characters (cast)** — build a roster, each with its own name, description, personality, avatar, and optional per-character system instruction; mark several "in scene" and pick who speaks next
+- **Auto-cast** — or don't pick: let the model direct the group scene and decide which character naturally answers each message
 - **Scene atmosphere** — set the time of day, weather, and location; it grounds every reply and tints the conversation's ambient background
+- **The living stage** — the backdrop plays the scene: rain streaks, storm lightning, drifting snow, fog, wind, stars at night, fireflies at dusk — plus optional locally-synthesized ambience (rain, thunder, wind, crickets) with no audio files involved
 - **Auto-scene** — let the character advance the time, weather, or place itself as the story moves
 - **Narrator beats** — drop in omniscient scene narration the characters react to, rendered as distinct scene lines
-- **Cinematic mode** — a one-click focused reading view with serif prose and a mood/scene-reactive backdrop
+- **Cinematic mode** — a one-click focused reading view with book typography (Literata) and a mood/scene-reactive backdrop
 - **Director controls** — steer length, perspective, pacing, and one-shot scene cues live, without editing prompts
-- Lorebook/World Info, Author's Note, moods, swipes, and SillyTavern-compatible character cards
+- **Story library** — park a whole story (chat, cast, lorebook, settings) on the backend and pick it up later; export any conversation as a Markdown story
+- Lorebook/World Info, Author's Note, moods, swipes, per-reply generation stats, and SillyTavern-compatible character cards
 
 ### **Privacy-First**
 - Everything runs locally—no cloud dependencies required (optional)

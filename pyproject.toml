@@ -1,6 +1,6 @@
 [project]
 name = "aiassistant"
-version = "0.1.0"
+version = "0.2.0"
 description = "Multimodal AI Assistant with TTS, STT, LLM, and Image Generation/Understanding capabilities"
 authors = [
     {name = "Ravi PURUSHOTTAM", email = "ravi.purushottamrajpurohit@gmail.com"}
