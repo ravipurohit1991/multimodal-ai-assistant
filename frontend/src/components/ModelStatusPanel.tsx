@@ -1,10 +1,28 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ModelStatus, ModelInfo } from "../types";
 import { Theme } from "../theme";
+import { IconRefresh } from "./Icons";
 
 interface ModelStatusPanelProps {
   show: boolean;
   theme: Theme;
+}
+
+/** Thin utilization meter with a mono readout. */
+function Meter({ label, value, detail, theme }: { label: string; value: number; detail: string; theme: Theme }) {
+  const pct = Math.max(0, Math.min(100, value));
+  const color = pct > 88 ? theme.colors.error : pct > 65 ? theme.colors.warning : theme.colors.success;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 3 }}>
+        <span style={{ fontSize: 11, fontWeight: 500, color: theme.colors.textSecondary }}>{label}</span>
+        <span className="meta-mono">{detail}</span>
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: theme.colors.field, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 2, background: color, transition: "width 0.6s ease" }} />
+      </div>
+    </div>
+  );
 }
 
 export function ModelStatusPanel({ show, theme }: ModelStatusPanelProps) {
@@ -40,81 +58,49 @@ export function ModelStatusPanel({ show, theme }: ModelStatusPanelProps) {
 
   if (!show) return null;
 
+  const deviceColor = (device: string) =>
+    device === "cuda" ? theme.colors.success
+    : device === "cpu" ? theme.colors.info
+    : device === "remote" ? theme.colors.secondary
+    : theme.colors.textTertiary;
+
   const renderModelCard = (label: string, model: ModelInfo | undefined) => {
     if (!model) return null;
-
-    const getDeviceColor = (device: string) => {
-      if (device === "cuda") return "#4CAF50";
-      if (device === "cpu") return "#2196F3";
-      if (device === "remote") return "#9C27B0";
-      return "#757575";
-    };
-
-    const getLoadedColor = (loaded: boolean) => {
-      return loaded ? "#4CAF50" : "#9E9E9E";
-    };
-
     return (
       <div
         key={label}
         style={{
-          background: "white",
-          borderRadius: 8,
-          padding: "12px 16px",
-          marginBottom: 12,
-          border: "1px solid #e1e8ed",
-          boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+          background: theme.colors.field,
+          borderRadius: 11,
+          padding: "10px 12px",
+          marginBottom: 8,
+          border: `1px solid ${theme.colors.borderLight}`,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#333" }}>{label}</h4>
-          <span
-            style={{
-              fontSize: 10,
-              padding: "2px 8px",
-              borderRadius: 12,
-              background: getLoadedColor(model.loaded),
-              color: "white",
-              fontWeight: 600,
-            }}
-          >
-            {model.loaded ? "LOADED" : "UNLOADED"}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: theme.colors.textPrimary }}>{label}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: model.loaded ? theme.colors.success : theme.colors.textTertiary,
+              opacity: model.loaded ? 1 : 0.5,
+            }} />
+            <span className="meta-mono">{model.loaded ? "loaded" : "idle"}</span>
           </span>
         </div>
 
-        <div style={{ fontSize: 11, color: "#666", lineHeight: 1.6 }}>
-          {model.model && (
-            <div>
-              <strong>Model:</strong> {model.model}
-            </div>
-          )}
-          {model.voice && (
-            <div>
-              <strong>Voice:</strong> {model.voice}
-            </div>
-          )}
-          {model.host && (
-            <div>
-              <strong>Host:</strong> {model.host}
-            </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-            <span>
-              <strong>Device:</strong>{" "}
-              <span style={{ color: getDeviceColor(model.device), fontWeight: 600 }}>
-                {model.device.toUpperCase()}
-              </span>
+        <div style={{ fontSize: 11, color: theme.colors.textSecondary, lineHeight: 1.6, overflowWrap: "break-word" }}>
+          {model.model && <div>{model.model}</div>}
+          {model.voice && <div>Voice: {model.voice}</div>}
+          {model.host && <div>{model.host}</div>}
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+            <span style={{ color: deviceColor(model.device), fontWeight: 600, fontSize: 10.5, letterSpacing: "0.05em" }}>
+              {model.device.toUpperCase()}
             </span>
-            {model.memory_mb > 0 && (
-              <span>
-                <strong>Memory:</strong> {model.memory_mb.toFixed(0)} MB
-              </span>
-            )}
+            {model.memory_mb > 0 && <span className="meta-mono">{model.memory_mb.toFixed(0)} MB</span>}
           </div>
           {model.lora && (
-            <div style={{ marginTop: 4, color: "#9C27B0" }}>
-              <strong>LoRA:</strong> Enabled
-            </div>
+            <div style={{ marginTop: 3, color: theme.colors.secondary, fontWeight: 500 }}>LoRA enabled</div>
           )}
         </div>
       </div>
@@ -124,206 +110,119 @@ export function ModelStatusPanel({ show, theme }: ModelStatusPanelProps) {
   return (
     <div
       style={{
-        width: 320,
-        background: "#f8f9fa",
-        borderLeft: "2px solid #e1e8ed",
+        width: 300,
+        background: theme.colors.surface,
+        borderLeft: `1px solid ${theme.colors.border}`,
         display: "flex",
         flexDirection: "column",
         overflow: "auto",
+        flexShrink: 0,
       }}
     >
-      {/* Panel Header */}
-      <div
-        style={{
-          padding: "20px 24px",
-          borderBottom: "2px solid #e1e8ed",
-          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-          color: "white",
-        }}
-      >
-        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>🔧 Model Status</h3>
-        <p style={{ margin: "4px 0 0 0", fontSize: 11, opacity: 0.9 }}>
-          {modelStatus?.low_vram_mode ? "⚡ Low VRAM Mode Active" : "System Resources"}
-        </p>
+      {/* Panel header */}
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${theme.colors.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div className="label-caps">Engine room</div>
+          <p style={{ margin: "3px 0 0", fontSize: 11.5, color: theme.colors.textTertiary }}>
+            {modelStatus?.low_vram_mode ? "Low-VRAM mode — models unload after use" : "Models & system resources"}
+          </p>
+        </div>
+        <button className="icon-btn" onClick={fetchModelStatus} disabled={loading} title="Refresh now">
+          <IconRefresh size={15} className={loading ? "spin" : undefined} />
+        </button>
       </div>
 
-      {/* Content */}
-      <div style={{ padding: "16px", flex: 1, overflow: "auto" }}>
+      <div style={{ padding: "14px 18px", flex: 1, overflow: "auto" }}>
         {loading && !modelStatus && (
-          <div style={{ textAlign: "center", padding: 20, color: "#666" }}>
-            <div>Loading...</div>
+          <div style={{ textAlign: "center", padding: 20, color: theme.colors.textTertiary, fontSize: 12.5 }}>
+            Reading instruments…
           </div>
         )}
 
         {error && (
-          <div
-            style={{
-              padding: 12,
-              background: "#ffebee",
-              color: "#c62828",
-              borderRadius: 8,
-              fontSize: 12,
-              marginBottom: 12,
-            }}
-          >
+          <div style={{
+            padding: "9px 12px",
+            background: theme.colors.errorLight,
+            color: theme.colors.textPrimary,
+            borderRadius: 9,
+            fontSize: 12,
+            marginBottom: 12,
+          }}>
             {error}
           </div>
         )}
 
         {modelStatus && (
           <>
-            {/* VRAM Mode Indicator */}
-            {modelStatus.low_vram_mode && (
-              <div
-                style={{
-                  padding: "10px 12px",
-                  background: "#fff3e0",
-                  color: "#e65100",
-                  borderRadius: 8,
-                  fontSize: 11,
-                  marginBottom: 12,
-                  border: "1px solid #ffb74d",
-                }}
-              >
-                <strong>⚡ Low VRAM Mode:</strong> Models unload after use to save memory
+            {/* GPU meters */}
+            {modelStatus.gpus && modelStatus.gpus.length > 0 && modelStatus.gpus.map((gpu) => (
+              <div key={gpu.device_id} style={{ marginBottom: 14 }}>
+                <div className="label-caps" style={{ marginBottom: 8 }}>
+                  GPU {gpu.device_id} · {gpu.name}
+                </div>
+                <Meter
+                  label="VRAM"
+                  value={gpu.memory_percent}
+                  detail={`${(gpu.memory_used_mb / 1024).toFixed(1)} / ${(gpu.memory_total_mb / 1024).toFixed(1)} GB`}
+                  theme={theme}
+                />
+                <Meter
+                  label="Utilization"
+                  value={gpu.utilization_percent}
+                  detail={`${gpu.utilization_percent.toFixed(0)}%${gpu.temperature_c ? ` · ${gpu.temperature_c.toFixed(0)}°C` : ""}${gpu.power_usage_w ? ` · ${gpu.power_usage_w.toFixed(0)}W` : ""}`}
+                  theme={theme}
+                />
               </div>
-            )}
+            ))}
 
-            {/* GPU Stats (pynvml-based, like nvtop) */}
-            {modelStatus.gpus && modelStatus.gpus.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                {modelStatus.gpus.map((gpu) => (
-                  <div
-                    key={gpu.device_id}
-                    style={{
-                      padding: "12px",
-                      background: "#e8f5e9",
-                      borderRadius: 8,
-                      fontSize: 11,
-                      marginBottom: 8,
-                      border: "1px solid #4CAF50",
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, color: "#2e7d32", marginBottom: 6 }}>
-                      🎮 GPU {gpu.device_id}: {gpu.name}
-                    </div>
-                    <div style={{ color: "#666" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                        <span><strong>VRAM:</strong> {gpu.memory_used_mb.toFixed(0)} / {gpu.memory_total_mb.toFixed(0)} MB</span>
-                        <span><strong>{gpu.memory_percent.toFixed(1)}%</strong></span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                        <span><strong>Utilization:</strong> {gpu.utilization_percent.toFixed(0)}%</span>
-                        {gpu.temperature_c && <span><strong>Temp:</strong> {gpu.temperature_c.toFixed(0)}°C</span>}
-                      </div>
-                      {gpu.power_usage_w && (
-                        <div><strong>Power:</strong> {gpu.power_usage_w.toFixed(1)} W</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* System Stats (like btop) */}
+            {/* System meters */}
             {modelStatus.system && (
-              <div
-                style={{
-                  padding: "12px",
-                  background: "#e3f2fd",
-                  borderRadius: 8,
-                  fontSize: 11,
-                  marginBottom: 12,
-                  border: "1px solid #2196F3",
-                }}
-              >
-                <div style={{ fontWeight: 600, color: "#1565c0", marginBottom: 6 }}>
-                  💻 System Resources
-                </div>
-                <div style={{ color: "#666" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                    <span><strong>CPU:</strong> {modelStatus.system.cpu_percent.toFixed(1)}%</span>
-                    <span><strong>Process:</strong> {modelStatus.system.process_cpu_percent.toFixed(1)}%</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                    <span><strong>RAM:</strong> {(modelStatus.system.ram_used_mb / 1024).toFixed(1)} / {(modelStatus.system.ram_total_mb / 1024).toFixed(1)} GB</span>
-                    <span><strong>{modelStatus.system.ram_percent.toFixed(1)}%</strong></span>
-                  </div>
-                  <div>
-                    <strong>Process RAM:</strong> {modelStatus.system.process_ram_mb.toFixed(0)} MB
-                  </div>
+              <div style={{ marginBottom: 14 }}>
+                <div className="label-caps" style={{ marginBottom: 8 }}>System</div>
+                <Meter
+                  label="CPU"
+                  value={modelStatus.system.cpu_percent}
+                  detail={`${modelStatus.system.cpu_percent.toFixed(0)}% · app ${modelStatus.system.process_cpu_percent.toFixed(0)}%`}
+                  theme={theme}
+                />
+                <Meter
+                  label="RAM"
+                  value={modelStatus.system.ram_percent}
+                  detail={`${(modelStatus.system.ram_used_mb / 1024).toFixed(1)} / ${(modelStatus.system.ram_total_mb / 1024).toFixed(1)} GB`}
+                  theme={theme}
+                />
+                <div className="meta-mono" style={{ marginTop: 2 }}>
+                  app footprint {(modelStatus.system.process_ram_mb / 1024).toFixed(1)} GB
                 </div>
               </div>
             )}
 
-            {/* CUDA Info */}
+            {/* CUDA note */}
             {modelStatus.cuda?.available && (
-              <div
-                style={{
-                  padding: "10px 12px",
-                  background: "#f3e5f5",
-                  borderRadius: 8,
-                  fontSize: 11,
-                  marginBottom: 12,
-                  border: "1px solid #9C27B0",
-                }}
-              >
-                <div style={{ fontWeight: 600, color: "#6a1b9a", marginBottom: 4 }}>
-                  ⚡ PyTorch CUDA
-                </div>
-                <div style={{ color: "#666" }}>
-                  <div><strong>Devices:</strong> {modelStatus.cuda.device_count}</div>
-                  <div><strong>Current:</strong> {modelStatus.cuda.current_device}</div>
-                </div>
+              <div className="meta-mono" style={{ marginBottom: 14 }}>
+                CUDA available · {modelStatus.cuda.device_count} device{(modelStatus.cuda.device_count ?? 0) === 1 ? "" : "s"}
               </div>
             )}
 
-            {/* Model Cards */}
-            <div style={{ marginTop: 12 }}>
-              <h4 style={{ margin: "0 0 12px 0", fontSize: 12, color: "#666", textTransform: "uppercase" }}>
-                Active Models
-              </h4>
+            {/* Model cards */}
+            <div className="label-caps" style={{ margin: "4px 0 8px" }}>Models</div>
+            {renderModelCard("Language model", modelStatus.models.llm)}
+            {renderModelCard("Speech to text", modelStatus.models.stt)}
+            {renderModelCard("Text to speech", modelStatus.models.tts)}
+            {renderModelCard("Image generator", modelStatus.models.image_generator)}
+            {renderModelCard("Vision", modelStatus.models.image_explainer)}
 
-              {renderModelCard("LLM", modelStatus.models.llm)}
-              {renderModelCard("Speech-to-Text", modelStatus.models.stt)}
-              {renderModelCard("Text-to-Speech", modelStatus.models.tts)}
-              {renderModelCard("Image Generator", modelStatus.models.image_generator)}
-              {renderModelCard("Image Explainer", modelStatus.models.image_explainer)}
-
-              {!modelStatus.models.llm &&
-                !modelStatus.models.stt &&
-                !modelStatus.models.tts &&
-                !modelStatus.models.image_generator &&
-                !modelStatus.models.image_explainer && (
-                  <div style={{ textAlign: "center", padding: 20, color: "#999", fontSize: 12 }}>
-                    No models loaded
-                  </div>
-                )}
-            </div>
+            {!modelStatus.models.llm &&
+              !modelStatus.models.stt &&
+              !modelStatus.models.tts &&
+              !modelStatus.models.image_generator &&
+              !modelStatus.models.image_explainer && (
+                <div style={{ textAlign: "center", padding: 20, color: theme.colors.textTertiary, fontSize: 12 }}>
+                  No models loaded yet
+                </div>
+              )}
           </>
         )}
-      </div>
-
-      {/* Refresh Button */}
-      <div style={{ padding: "12px 16px", borderTop: "1px solid #e1e8ed", background: "white" }}>
-        <button
-          onClick={fetchModelStatus}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "8px 12px",
-            background: loading ? "#ccc" : "#667eea",
-            color: "white",
-            border: "none",
-            borderRadius: 6,
-            cursor: loading ? "not-allowed" : "pointer",
-            fontSize: 12,
-            fontWeight: 600,
-            transition: "all 0.2s",
-          }}
-        >
-          {loading ? "Refreshing..." : "🔄 Refresh Status"}
-        </button>
       </div>
     </div>
   );

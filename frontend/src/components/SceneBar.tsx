@@ -10,32 +10,46 @@ import {
   weatherLabel,
   hasScene,
 } from "../atmosphere";
+import { IconChevronRight, IconX, IconVolume, IconVolumeOff, IconSparkles } from "./Icons";
 
 interface SceneBarProps {
   connected: boolean;
   scene: SceneState;
   /** Whether the character may advance the scene itself via [SCENE: ...] tags. */
   autoScene: boolean;
+  /** Stage effects — weather/night particles over the reading area. */
+  fxEnabled: boolean;
+  /** Synthesized scene ambience (rain, wind, thunder, crickets). */
+  soundOn: boolean;
+  soundVolume: number;
   theme: Theme;
   onSceneChange: (next: SceneState) => void;
   onToggleAutoScene: (enabled: boolean) => void;
+  onToggleFx: (enabled: boolean) => void;
+  onToggleSound: (enabled: boolean) => void;
+  onSoundVolume: (v: number) => void;
 }
 
 /**
  * Scene Bar — a persistent sense of place for the roleplay.
  *
- * Setting the time of day, weather, and location grounds the character's prose
- * (the values are injected into every turn) and tints the conversation's ambient
- * background so the app visually reflects where the story is happening. Clicking
- * an already-active time/weather chip clears it, so scenes stay optional.
+ * Time, weather, and location ground the character's prose (injected into
+ * every turn) and drive the stage itself: the ambient backdrop, the particle
+ * effects, and the synthesized soundscape. Clicking an active chip clears it.
  */
 export function SceneBar({
   connected,
   scene,
   autoScene,
+  fxEnabled,
+  soundOn,
+  soundVolume,
   theme,
   onSceneChange,
   onToggleAutoScene,
+  onToggleFx,
+  onToggleSound,
+  onSoundVolume,
 }: SceneBarProps) {
   const [open, setOpen] = useState(false);
   const [loc, setLoc] = useState(scene.location);
@@ -58,26 +72,10 @@ export function SceneBar({
     if (next !== scene.location) commit({ location: next });
   };
 
-  const chip = (activeChip: boolean, icon: string, label: string): React.CSSProperties => ({
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 5,
-    padding: "5px 11px",
-    fontSize: 12.5,
-    fontWeight: 600,
-    borderRadius: 999,
-    border: `1px solid ${activeChip ? "transparent" : theme.colors.border}`,
-    background: activeChip ? theme.colors.secondary : theme.colors.surface,
-    color: activeChip ? "white" : theme.colors.textSecondary,
-    cursor: connected ? "pointer" : "not-allowed",
-    whiteSpace: "nowrap",
-    transition: "all 0.15s",
-  });
-
   return (
     <div
       style={{
-        padding: "8px 24px",
+        padding: "7px 20px",
         borderBottom: `1px solid ${theme.colors.border}`,
         background: theme.colors.surface,
       }}
@@ -90,26 +88,23 @@ export function SceneBar({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 5,
             background: "none",
             border: "none",
             cursor: "pointer",
             color: theme.colors.textPrimary,
-            fontWeight: 700,
-            fontSize: 13,
             padding: 0,
           }}
         >
-          <span
-            style={{
-              transform: open ? "rotate(90deg)" : "none",
-              transition: "transform 0.15s",
-              display: "inline-block",
-            }}
-          >
-            ▶
+          <span style={{
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform 0.15s",
+            display: "inline-flex",
+            color: theme.colors.textTertiary,
+          }}>
+            <IconChevronRight size={13} />
           </span>
-          🎞️ Scene
+          <span className="label-caps" style={{ color: theme.colors.textSecondary }}>Scene</span>
         </button>
 
         {active ? (
@@ -117,21 +112,22 @@ export function SceneBar({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: 10,
               flexWrap: "wrap",
               fontSize: 12.5,
               color: theme.colors.textSecondary,
+              minWidth: 0,
             }}
           >
             {scene.time && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <span style={{ fontSize: 15 }}>{timeIcon(scene.time)}</span>
+                <span style={{ fontSize: 14 }}>{timeIcon(scene.time)}</span>
                 {timeLabel(scene.time)}
               </span>
             )}
             {scene.weather && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <span style={{ fontSize: 15 }}>{weatherIcon(scene.weather)}</span>
+                <span style={{ fontSize: 14 }}>{weatherIcon(scene.weather)}</span>
                 {weatherLabel(scene.weather)}
               </span>
             )}
@@ -139,8 +135,9 @@ export function SceneBar({
               <span
                 title={scene.location}
                 style={{
+                  fontFamily: theme.fonts.prose,
                   fontStyle: "italic",
-                  maxWidth: 340,
+                  maxWidth: 320,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
@@ -151,92 +148,105 @@ export function SceneBar({
             )}
           </div>
         ) : (
-          <span style={{ fontSize: 11, color: theme.colors.textTertiary }}>
-            Ground the story in a time, weather &amp; place — the character stays in it
+          <span style={{ fontSize: 12, color: theme.colors.textTertiary }}>
+            Ground the story in a time, weather &amp; place
           </span>
         )}
 
-        {active && (
+        {/* Stage controls — effects & ambience, right-aligned */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 2 }}>
+          {soundOn && (
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round(soundVolume * 100)}
+              onChange={(e) => onSoundVolume(Number(e.target.value) / 100)}
+              title="Ambience volume"
+              style={{ width: 74, height: 4, cursor: "pointer" }}
+            />
+          )}
           <button
-            onClick={() => {
-              setLoc("");
-              onSceneChange({ time: "", weather: "", location: "" });
-            }}
-            title="Clear the scene"
-            disabled={!connected}
-            style={{
-              marginLeft: "auto",
-              border: "none",
-              background: "transparent",
-              color: theme.colors.textTertiary,
-              cursor: connected ? "pointer" : "not-allowed",
-              fontSize: 12,
-              fontWeight: 600,
-            }}
+            className="icon-btn"
+            onClick={() => onToggleSound(!soundOn)}
+            data-active={soundOn}
+            title={soundOn ? "Mute scene ambience" : "Play scene ambience (rain, wind, thunder, crickets — synthesized locally)"}
           >
-            ✕ Clear
+            {soundOn ? <IconVolume size={15} /> : <IconVolumeOff size={15} />}
           </button>
-        )}
+          <button
+            className="icon-btn"
+            onClick={() => onToggleFx(!fxEnabled)}
+            data-active={fxEnabled}
+            title={fxEnabled ? "Hide stage effects (weather & night particles)" : "Show stage effects (weather & night particles)"}
+          >
+            <IconSparkles size={15} />
+          </button>
+          {active && (
+            <button
+              className="icon-btn"
+              onClick={() => {
+                setLoc("");
+                onSceneChange({ time: "", weather: "", location: "" });
+              }}
+              title="Clear the scene"
+              disabled={!connected}
+            >
+              <IconX size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       {open && (
-        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-          <Field label="Time" theme={theme}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <div className="fade-up" style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10, paddingBottom: 4 }}>
+          <Field label="Time">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {TIME_OPTIONS.map((o) => (
                 <button
                   key={o.v}
+                  className="chip"
                   disabled={!connected}
+                  data-active={scene.time === o.v}
                   onClick={() => pickTime(o.v)}
-                  style={chip(scene.time === o.v, o.icon, o.label)}
                 >
-                  <span style={{ fontSize: 15 }}>{o.icon}</span>
+                  <span style={{ fontSize: 13 }}>{o.icon}</span>
                   {o.label}
                 </button>
               ))}
             </div>
           </Field>
 
-          <Field label="Weather" theme={theme}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <Field label="Weather">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
               {WEATHER_OPTIONS.map((o) => (
                 <button
                   key={o.v}
+                  className="chip"
                   disabled={!connected}
+                  data-active={scene.weather === o.v}
                   onClick={() => pickWeather(o.v)}
-                  style={chip(scene.weather === o.v, o.icon, o.label)}
                 >
-                  <span style={{ fontSize: 15 }}>{o.icon}</span>
+                  <span style={{ fontSize: 13 }}>{o.icon}</span>
                   {o.label}
                 </button>
               ))}
             </div>
           </Field>
 
-          <Field label="Place" theme={theme}>
+          <Field label="Place">
             <input
               type="text"
+              className="input"
               value={loc}
               disabled={!connected}
               placeholder="Where are we? (e.g. a candlelit tavern, a rain-soaked rooftop)"
               onChange={(e) => setLoc(e.target.value)}
               onBlur={commitLocation}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.currentTarget.blur();
-                }
+                if (e.key === "Enter") e.currentTarget.blur();
               }}
-              style={{
-                flex: 1,
-                minWidth: 260,
-                padding: "8px 12px",
-                fontSize: 13,
-                borderRadius: 8,
-                border: `1px solid ${theme.colors.border}`,
-                background: theme.colors.surface,
-                color: theme.colors.textPrimary,
-                outline: "none",
-              }}
+              style={{ flex: 1, minWidth: 260 }}
             />
           </Field>
 
@@ -250,6 +260,7 @@ export function SceneBar({
               fontSize: 12.5,
               color: theme.colors.textSecondary,
               cursor: connected ? "pointer" : "not-allowed",
+              paddingLeft: 72,
             }}
           >
             <input
@@ -257,11 +268,10 @@ export function SceneBar({
               checked={autoScene}
               disabled={!connected}
               onChange={(e) => onToggleAutoScene(e.target.checked)}
-              style={{ cursor: connected ? "pointer" : "not-allowed" }}
             />
-            <span style={{ fontWeight: 600 }}>🪄 Let the story change the scene</span>
+            <span style={{ fontWeight: 500 }}>Let the story change the scene</span>
             <span style={{ color: theme.colors.textTertiary }}>
-              — the character can move the time, weather &amp; place as the story unfolds
+              — the character can move time, weather &amp; place as the story unfolds
             </span>
           </label>
         </div>
@@ -270,29 +280,10 @@ export function SceneBar({
   );
 }
 
-function Field({
-  label,
-  theme,
-  children,
-}: {
-  label: string;
-  theme: Theme;
-  children: React.ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <span
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: theme.colors.textTertiary,
-          textTransform: "uppercase",
-          letterSpacing: 0.4,
-          minWidth: 62,
-        }}
-      >
-        {label}
-      </span>
+      <span className="label-caps" style={{ minWidth: 62 }}>{label}</span>
       {children}
     </div>
   );

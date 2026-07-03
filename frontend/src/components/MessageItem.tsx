@@ -2,10 +2,10 @@ import { Message } from "../types";
 import { Theme } from "../theme";
 import { FormattedText } from "./FormattedText";
 import { moodToEmoji, moodToColor } from "../mood";
-
-// Book-like serif stack used in cinematic reading mode.
-const SERIF_STACK =
-  "'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif";
+import {
+  IconVolume, IconStop, IconPencil, IconTrash, IconRewind, IconRefresh,
+  IconSend, IconChevronLeft, IconChevronRight, IconPlus, IconCheck, IconX,
+} from "./Icons";
 
 interface MessageItemProps {
   message: Message;
@@ -31,6 +31,50 @@ interface MessageItemProps {
   onSwipe: (index: number, direction: "left" | "right") => void;
   onPlay: (text: string, index: number) => void;
   onEditingTextChange: (text: string) => void;
+}
+
+/** Round character portrait; falls back to the name's initial on a tinted disc. */
+export function Avatar({
+  image, name, isUser, theme, size = 34,
+}: {
+  image: string | null; name: string; isUser: boolean; theme: Theme; size?: number;
+}) {
+  const tint = isUser ? theme.colors.primary : theme.colors.secondary;
+  return (
+    <div style={{
+      width: size,
+      height: size,
+      borderRadius: size * 0.32,
+      background: image ? theme.colors.surfaceElevated : `color-mix(in srgb, ${tint} 16%, transparent)`,
+      color: tint,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: size * 0.44,
+      fontWeight: 600,
+      flexShrink: 0,
+      overflow: "hidden",
+      border: `1px solid ${theme.colors.border}`,
+      boxShadow: theme.colors.shadowSm,
+    }}>
+      {image ? (
+        <img src={image} alt={name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      ) : (
+        (name || "?").trim().charAt(0).toUpperCase() || "?"
+      )}
+    </div>
+  );
+}
+
+/** "2.1s · 38 tok/s" — the reply's generation stats, if the backend sent them. */
+function genStats(message: Message): string {
+  if (!message.genMs) return "";
+  const secs = message.genMs / 1000;
+  let out = `${secs.toFixed(1)}s`;
+  if (message.genTokens && secs > 0.2) {
+    out += ` · ${Math.round(message.genTokens / secs)} tok/s`;
+  }
+  return out;
 }
 
 export function MessageItem({
@@ -59,31 +103,20 @@ export function MessageItem({
   onEditingTextChange
 }: MessageItemProps) {
   const isEditing = editingMessage?.index === index;
+  const isUser = message.role === "user";
 
-  // Narrator beats render as an omniscient scene line — centered, italic, no
-  // avatar or bubble — like a book's stage direction. (Editing falls through to
-  // the standard editor below.)
+  // Narrator beats render as an omniscient interlude — centered, set in the
+  // story face, framed by hairlines — like stage direction in a printed play.
   if (message.narrator && !isEditing) {
-    const tinyBtn = (bg: string): React.CSSProperties => ({
-      fontSize: 12,
-      padding: "2px 6px",
-      background: bg,
-      color: "white",
-      border: "none",
-      borderRadius: 3,
-      cursor: "pointer",
-      fontWeight: 600,
-      lineHeight: 1,
-    });
     return (
-      <div style={{ margin: immersive ? "22px auto" : "18px auto", maxWidth: immersive ? 760 : 620, textAlign: "center" }}>
+      <div className="msg-row fade-up" style={{ margin: immersive ? "26px auto" : "20px auto", maxWidth: immersive ? 760 : 620, textAlign: "center" }}>
         <div style={{
-          fontFamily: SERIF_STACK,
+          fontFamily: theme.fonts.prose,
           fontStyle: "italic",
           fontSize: immersive ? 15 : 13.5,
-          lineHeight: 1.7,
+          lineHeight: 1.75,
           color: theme.colors.textSecondary,
-          padding: immersive ? "10px 20px" : "8px 16px",
+          padding: immersive ? "12px 20px" : "10px 16px",
           borderTop: `1px solid ${theme.colors.border}`,
           borderBottom: `1px solid ${theme.colors.border}`,
           whiteSpace: "pre-wrap",
@@ -94,177 +127,132 @@ export function MessageItem({
             message.content
           )}
         </div>
-        <div style={{ marginTop: 4, display: "flex", gap: 4, justifyContent: "center", opacity: 0.7 }}>
-          <button onClick={() => onEdit(index)} title="Edit narration" style={tinyBtn("#2196F3")}>✏️</button>
-          <button onClick={() => onDelete(index)} title="Remove narration" style={tinyBtn("#f44336")}>🗑️</button>
+        <div className="msg-actions" style={{ marginTop: 4, display: "flex", gap: 2, justifyContent: "center" }}>
+          <button className="icon-btn sm" onClick={() => onEdit(index)} title="Edit narration"><IconPencil size={13} /></button>
+          <button className="icon-btn sm danger" onClick={() => onDelete(index)} title="Remove narration"><IconTrash size={13} /></button>
           {index < conversationLength - 1 && (
-            <button onClick={() => onRewind(index)} title="Rewind to here" style={tinyBtn("#FF9800")}>⏪</button>
+            <button className="icon-btn sm" onClick={() => onRewind(index)} title="Rewind the story to here"><IconRewind size={13} /></button>
           )}
         </div>
       </div>
     );
   }
 
-  const characterImage = message.role === "user"
+  const characterImage = isUser
     ? userCharacterImage
     : (message.characterImage || assistantCharacterImage);
   // In group scenes, an assistant reply is attributed to the speaker that authored it.
-  const displayName = message.role === "user"
-    ? userName
-    : (message.speaker || assistantName);
+  const displayName = isUser ? userName : (message.speaker || assistantName);
 
   // Response swipes: alternative generations for the latest assistant message.
   const swipes = message.swipes ?? [message.content];
   const swipeIndex = message.swipeIndex ?? swipes.length - 1;
   const showSwipes = message.role === "assistant" && isLast;
+  const stats = message.role === "assistant" ? genStats(message) : "";
 
   return (
     <div
+      className="msg-row fade-up"
       style={{
-        marginBottom: 16,
+        marginBottom: immersive ? 20 : 16,
         display: "flex",
-        flexDirection: message.role === "user" ? "row-reverse" : "row",
-        gap: 12
+        flexDirection: isUser ? "row-reverse" : "row",
+        gap: 10,
       }}
     >
-      {/* Avatar */}
-      <div style={{
-        width: 40,
-        height: 40,
-        borderRadius: "50%",
-        background: characterImage ? "transparent" : (message.role === "user"
-          ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-          : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)"),
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 20,
-        flexShrink: 0,
-        overflow: "hidden",
-        border: message.role === "user" ? "2px solid #667eea" : "2px solid #f5576c"
-      }}>
-        {characterImage ? (
-          <img src={characterImage} alt={displayName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : (
-          message.role === "user" ? "👤" : "🤖"
-        )}
-      </div>
+      <Avatar image={characterImage} name={displayName} isUser={isUser} theme={theme} />
 
       {/* Message Content */}
       <div style={{
-        maxWidth: immersive ? "82%" : "70%",
+        maxWidth: immersive ? "82%" : "72%",
+        minWidth: 0,
         display: "flex",
         flexDirection: "column",
-        gap: 6
+        gap: 4
       }}>
-        {/* Name and Timestamp */}
+        {/* Name · mood · time · stats */}
         <div style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "baseline",
           gap: 8,
-          flexDirection: message.role === "user" ? "row-reverse" : "row"
+          flexDirection: isUser ? "row-reverse" : "row",
+          padding: "0 2px",
         }}>
           <span style={{
-            fontSize: 13,
-            fontWeight: 700,
-            color: "#2d3748"
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: isUser ? theme.colors.primary : theme.colors.secondary,
+            letterSpacing: 0.1,
           }}>
             {displayName}
           </span>
           {message.role === "assistant" && message.mood && (
-            <span title={`Mood: ${message.mood}`} style={{ fontSize: 14, lineHeight: 1 }}>
+            <span title={`Mood: ${message.mood}`} style={{ fontSize: 13, lineHeight: 1 }}>
               {moodToEmoji(message.mood)}
             </span>
           )}
-          <span style={{
-            fontSize: 11,
-            color: "#a0aec0"
-          }}>
-            {message.timestamp.toLocaleTimeString()}
+          <span className="meta-mono">
+            {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
+          {stats && <span className="meta-mono" title="Generation time · speed">{stats}</span>}
         </div>
 
         {/* Message Bubble */}
         {isEditing ? (
           <div>
             <textarea
+              className="input"
               value={editingMessage.text}
               onChange={(e) => onEditingTextChange(e.target.value)}
+              autoFocus
               style={{
                 width: "100%",
-                minHeight: 80,
-                padding: 12,
-                fontSize: 14,
-                fontFamily: "inherit",
-                borderRadius: 12,
-                border: "2px solid #667eea",
-                resize: "vertical"
+                minHeight: 90,
+                fontSize: 13.5,
+                lineHeight: 1.55,
+                resize: "vertical",
               }}
             />
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button
-                onClick={() => onSaveEdit(index)}
-                style={{
-                  fontSize: 13,
-                  padding: "6px 12px",
-                  background: "#4CAF50",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 600
-                }}
-              >
-                ✓ Save
+              <button className="btn btn-primary" onClick={() => onSaveEdit(index)}>
+                <IconCheck size={14} /> Save
               </button>
-              <button
-                onClick={onCancelEdit}
-                style={{
-                  fontSize: 13,
-                  padding: "6px 12px",
-                  background: "#f44336",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 600
-                }}
-              >
-                ✗ Cancel
+              <button className="btn btn-ghost" onClick={onCancelEdit}>
+                <IconX size={14} /> Cancel
               </button>
             </div>
           </div>
         ) : (
           <div>
             <div style={{
-              padding: immersive ? "14px 18px" : "12px 16px",
-              borderRadius: 12,
-              background: message.role === "user" ? "#667eea" : "white",
-              color: message.role === "user" ? "white" : "#2d3748",
-              fontFamily: immersive ? SERIF_STACK : "inherit",
-              fontSize: immersive ? 15.5 : 14,
-              lineHeight: immersive ? 1.75 : 1.5,
+              padding: immersive ? "14px 18px" : "11px 15px",
+              borderRadius: 14,
+              ...(isUser ? { borderTopRightRadius: 5 } : { borderTopLeftRadius: 5 }),
+              background: isUser ? theme.colors.userBubble : theme.colors.assistantBubble,
+              color: theme.colors.textPrimary,
+              // The story speaks in the book face; you speak in the console face.
+              fontFamily: message.role === "assistant" || immersive ? theme.fonts.prose : theme.fonts.ui,
+              fontSize: message.role === "assistant" ? (immersive ? 15.5 : 14.5) : (immersive ? 15 : 13.5),
+              lineHeight: message.role === "assistant" ? 1.7 : 1.55,
               whiteSpace: "pre-wrap",
-              boxShadow: message.role === "user"
-                ? "0 2px 8px rgba(102, 126, 234, 0.3)"
-                : "0 2px 8px rgba(0, 0, 0, 0.1)",
-              border: message.role === "assistant" ? "1px solid #e1e8ed" : "none",
+              overflowWrap: "break-word",
+              border: `1px solid ${isUser ? "color-mix(in srgb, " + theme.colors.primary + " 26%, transparent)" : theme.colors.border}`,
+              boxShadow: theme.colors.shadowSm,
               // Tint the assistant bubble's edge with the mood it was delivered in
               ...(message.role === "assistant" && message.mood
-                ? { borderLeft: `3px solid ${moodToColor(message.mood)}` }
+                ? { borderLeft: `2px solid ${moodToColor(message.mood)}` }
                 : {})
             }}>
               {/* Display user-attached image at the top if present */}
-              {message.role === "user" && message.image && (
-                <div style={{ marginBottom: message.content ? 12 : 0 }}>
+              {isUser && message.image && (
+                <div style={{ marginBottom: message.content ? 10 : 0 }}>
                   <img
                     src={message.image}
-                    alt="User attached image"
+                    alt="Attached"
                     style={{
                       maxWidth: "100%",
                       maxHeight: 300,
-                      borderRadius: 8,
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.2)",
+                      borderRadius: 9,
                       display: "block"
                     }}
                   />
@@ -272,34 +260,30 @@ export function MessageItem({
               )}
 
               {message.role === "assistant" && formattingEnabled ? (
-                <FormattedText
-                  text={message.content}
-                  theme={theme}
-                  dialogueColor="#4c51bf"
-                  actionColor="#6b7280"
-                />
+                <FormattedText text={message.content} theme={theme} />
               ) : (
                 message.content
               )}
 
               {/* Display AI-generated image if present (for assistant messages) */}
               {message.role === "assistant" && message.image && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 10 }}>
                   <img
                     src={`data:image/png;base64,${message.image}`}
                     alt={message.imagePrompt || "Generated image"}
                     style={{
                       maxWidth: "100%",
-                      borderRadius: 8,
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
+                      borderRadius: 9,
+                      boxShadow: theme.colors.shadowMd,
                       display: "block"
                     }}
                   />
                   {message.imagePrompt && (
                     <div style={{
                       marginTop: 6,
-                      fontSize: 12,
-                      color: "#718096",
+                      fontSize: 11.5,
+                      fontFamily: theme.fonts.ui,
+                      color: theme.colors.textTertiary,
                       fontStyle: "italic"
                     }}>
                       {message.imagePrompt}
@@ -309,202 +293,79 @@ export function MessageItem({
               )}
             </div>
 
-            {/* Swipe navigation — browse / generate alternative responses */}
-            {showSwipes && (
-              <div style={{
-                marginTop: 6,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 13,
-                color: theme.colors.textTertiary
-              }}>
-                <button
-                  onClick={() => onSwipe(index, "left")}
-                  disabled={swipeIndex <= 0}
-                  title="Previous response"
-                  style={{
-                    padding: "2px 8px",
-                    background: swipeIndex <= 0 ? theme.colors.buttonDisabled : theme.colors.buttonSecondary,
-                    color: swipeIndex <= 0 ? theme.colors.textTertiary : theme.colors.textPrimary,
-                    border: "none",
-                    borderRadius: 4,
-                    cursor: swipeIndex <= 0 ? "not-allowed" : "pointer",
-                    fontWeight: 700,
-                    lineHeight: 1.2
-                  }}
-                >
-                  ◀
-                </button>
-                <span style={{ fontWeight: 600, minWidth: 34, textAlign: "center" }}>
-                  {swipeIndex + 1} / {swipes.length}
-                </span>
-                <button
-                  onClick={() => onSwipe(index, "right")}
-                  title={swipeIndex >= swipes.length - 1 ? "Generate a new alternative" : "Next response"}
-                  style={{
-                    padding: "2px 8px",
-                    background: theme.colors.buttonSecondary,
-                    color: theme.colors.textPrimary,
-                    border: "none",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    fontWeight: 700,
-                    lineHeight: 1.2
-                  }}
-                >
-                  {swipeIndex >= swipes.length - 1 ? "➕" : "▶"}
-                </button>
-              </div>
-            )}
-
-            {/* Action Buttons */}
+            {/* Swipes + actions on one quiet row, revealed on hover */}
             <div style={{
-              marginTop: 6,
+              marginTop: 3,
               display: "flex",
-              gap: 4,
-              flexWrap: "wrap",
-              justifyContent: message.role === "user" ? "flex-end" : "flex-start"
+              alignItems: "center",
+              gap: 2,
+              flexDirection: isUser ? "row-reverse" : "row",
             }}>
-              {/* Replay Audio Button (only for assistant) */}
-              {message.role === "assistant" && (
-                <button
-                  onClick={() => onPlay(message.content, index)}
-                  title={playingMessageIndex === index ? "Stop audio" : "Replay audio"}
-                  style={{
-                    fontSize: 13,
-                    padding: "3px 6px",
-                    background: playingMessageIndex === index ? "#f44336" : "#4CAF50",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 3,
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    lineHeight: 1
-                  }}
-                >
-                  {playingMessageIndex === index ? "⏹️" : "🔊"}
-                </button>
+              {/* Swipe navigation — browse / generate alternative takes */}
+              {showSwipes && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 2, marginRight: 6 }}>
+                  <button
+                    className="icon-btn sm"
+                    onClick={() => onSwipe(index, "left")}
+                    disabled={swipeIndex <= 0}
+                    title="Previous take"
+                  >
+                    <IconChevronLeft size={14} />
+                  </button>
+                  <span className="meta-mono" style={{ minWidth: 30, textAlign: "center" }}>
+                    {swipeIndex + 1}/{swipes.length}
+                  </span>
+                  <button
+                    className="icon-btn sm"
+                    onClick={() => onSwipe(index, "right")}
+                    title={swipeIndex >= swipes.length - 1 ? "Write a new take" : "Next take"}
+                  >
+                    {swipeIndex >= swipes.length - 1 ? <IconPlus size={14} /> : <IconChevronRight size={14} />}
+                  </button>
+                </span>
               )}
 
-              {/* Edit Button */}
-              <button
-                onClick={() => onEdit(index)}
-                title="Edit message"
-                style={{
-                  fontSize: 13,
-                  padding: "3px 6px",
-                  background: "#2196F3",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 3,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  lineHeight: 1
-                }}
-              >
-                ✏️
-              </button>
-
-              {/* Delete Button */}
-              <button
-                onClick={() => onDelete(index)}
-                title="Remove message"
-                style={{
-                  fontSize: 13,
-                  padding: "3px 6px",
-                  background: "#f44336",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 3,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  lineHeight: 1
-                }}
-              >
-                🗑️
-              </button>
-
-              {/* Rewind Button (remove all downstream messages) */}
-              {index < conversationLength - 1 && (
-                <button
-                  onClick={() => onRewind(index)}
-                  title="Rewind to this message (remove all messages after this)"
-                  style={{
-                    fontSize: 13,
-                    padding: "3px 6px",
-                    background: "#FF9800",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 3,
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    lineHeight: 1
-                  }}
-                >
-                  ⏪
+              <span className="msg-actions" style={{ display: "inline-flex", gap: 2 }}>
+                {message.role === "assistant" && (
+                  <button
+                    className="icon-btn sm"
+                    onClick={() => onPlay(message.content, index)}
+                    title={playingMessageIndex === index ? "Stop audio" : "Read this aloud"}
+                    data-active={playingMessageIndex === index}
+                  >
+                    {playingMessageIndex === index ? <IconStop size={13} /> : <IconVolume size={13} />}
+                  </button>
+                )}
+                <button className="icon-btn sm" onClick={() => onEdit(index)} title="Edit message">
+                  <IconPencil size={13} />
                 </button>
-              )}
-
-              {/* Resend Button (only for last message if it's a user message) */}
-              {message.role === "user" && isLast && (
-                <button
-                  onClick={onResend}
-                  title="Resend this message"
-                  style={{
-                    fontSize: 13,
-                    padding: "3px 6px",
-                    background: "#9C27B0",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 3,
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    lineHeight: 1
-                  }}
-                >
-                  🔄
+                <button className="icon-btn sm danger" onClick={() => onDelete(index)} title="Remove message">
+                  <IconTrash size={13} />
                 </button>
-              )}
-
-              {/* Regenerate Button (only for last message if it's an assistant message) */}
-              {message.role === "assistant" && isLast && (
-                <button
-                  onClick={() => onRegenerate(index)}
-                  title="Regenerate response (adds a new swipe)"
-                  style={{
-                    fontSize: 13,
-                    padding: "3px 6px",
-                    background: "#673AB7",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 3,
-                    cursor: "pointer",
-                    fontWeight: 600,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    lineHeight: 1
-                  }}
-                >
-                  🔁
-                </button>
-              )}
+                {index < conversationLength - 1 && (
+                  <button
+                    className="icon-btn sm"
+                    onClick={() => onRewind(index)}
+                    title="Rewind the story to this message"
+                  >
+                    <IconRewind size={13} />
+                  </button>
+                )}
+                {isUser && isLast && (
+                  <button className="icon-btn sm" onClick={onResend} title="Resend this message">
+                    <IconSend size={13} />
+                  </button>
+                )}
+                {message.role === "assistant" && isLast && (
+                  <button
+                    className="icon-btn sm"
+                    onClick={() => onRegenerate(index)}
+                    title="Regenerate (keeps this take as a swipe)"
+                  >
+                    <IconRefresh size={13} />
+                  </button>
+                )}
+              </span>
             </div>
           </div>
         )}

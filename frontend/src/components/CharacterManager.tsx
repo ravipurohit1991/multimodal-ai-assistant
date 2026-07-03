@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { Character } from "../types";
 import { Theme } from "../theme";
+import { IconX, IconUsers, IconPlus, IconUpload, IconCopy, IconMessage, IconTrash } from "./Icons";
 
 interface CharacterManagerProps {
   show: boolean;
@@ -36,6 +37,37 @@ interface CharacterManagerProps {
   onUserNameChange: (v: string) => void;
   onUserPersonaChange: (v: string) => void;
   onUserAvatarChange: (dataUrl: string | null) => void;
+}
+
+function PortraitDisc({
+  image, label, tint, theme, size = 84,
+}: { image: string | null; label: string; tint: string; theme: Theme; size?: number }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size * 0.3,
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: size * 0.4,
+        fontWeight: 600,
+        fontFamily: "inherit",
+        color: tint,
+        background: image ? theme.colors.surfaceElevated : `color-mix(in srgb, ${tint} 15%, transparent)`,
+        border: `1px solid ${theme.colors.border}`,
+        flexShrink: 0,
+      }}
+    >
+      {image ? (
+        <img src={image} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      ) : (
+        (label || "?").trim().charAt(0).toUpperCase() || "?"
+      )}
+    </div>
+  );
 }
 
 /**
@@ -92,22 +124,11 @@ export function CharacterManager({
   const labelStyle: React.CSSProperties = {
     display: "block",
     marginBottom: 4,
-    fontWeight: 700,
-    fontSize: 13,
+    fontWeight: 600,
+    fontSize: 12.5,
     color: theme.colors.textPrimary,
   };
-  const fieldStyle: React.CSSProperties = {
-    width: "100%",
-    padding: 8,
-    fontSize: 14,
-    fontFamily: "inherit",
-    color: theme.colors.textPrimary,
-    background: theme.colors.background,
-    border: `1px solid ${theme.colors.border}`,
-    borderRadius: 6,
-    boxSizing: "border-box",
-    resize: "vertical",
-  };
+  const hint: React.CSSProperties = { fontWeight: 400, color: theme.colors.textTertiary };
 
   const readAvatar = (e: React.ChangeEvent<HTMLInputElement>, apply: (dataUrl: string) => void) => {
     const file = e.target.files?.[0];
@@ -125,54 +146,31 @@ export function CharacterManager({
   const handleUserAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => readAvatar(e, onUserAvatarChange);
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-      onClick={onClose}
-    >
+    <div className="modal-scrim" onClick={onClose}>
       <div
+        className="modal-card"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: theme.colors.surfaceElevated,
-          color: theme.colors.textPrimary,
-          borderRadius: 12,
-          width: "min(920px, 94vw)",
-          maxHeight: "90vh",
-          overflow: "hidden",
-          boxShadow: theme.colors.shadowLg,
-          border: `1px solid ${theme.colors.border}`,
-          display: "flex",
-          flexDirection: "column",
-        }}
+        style={{ width: "min(920px, 94vw)", maxHeight: "88vh" }}
       >
         {/* Header */}
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
-            padding: "18px 22px",
+            gap: 10,
+            padding: "14px 20px",
             borderBottom: `1px solid ${theme.colors.border}`,
           }}
         >
-          <h3 style={{ margin: 0, fontSize: 20 }}>
-            🎭 Cast &amp; Characters
-            <span style={{ fontSize: 13, fontWeight: 500, color: theme.colors.textTertiary, marginLeft: 10 }}>
-              {characters.length} total · {inSceneCount} in scene
-            </span>
-          </h3>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: theme.colors.textTertiary }}
-          >
-            ✕
+          <IconUsers size={17} style={{ color: theme.colors.primary }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: theme.colors.textPrimary }}>Cast &amp; characters</div>
+            <div style={{ fontSize: 11.5, color: theme.colors.textTertiary }}>
+              {characters.length} in the roster · {inSceneCount} in scene
+            </div>
+          </div>
+          <button className="icon-btn" onClick={onClose} title="Close">
+            <IconX size={16} />
           </button>
         </div>
 
@@ -180,14 +178,15 @@ export function CharacterManager({
           {/* Roster list */}
           <div
             style={{
-              width: 260,
+              width: 250,
               borderRight: `1px solid ${theme.colors.border}`,
               overflowY: "auto",
-              padding: 12,
+              padding: 10,
               display: "flex",
               flexDirection: "column",
-              gap: 8,
+              gap: 4,
               background: theme.colors.surface,
+              flexShrink: 0,
             }}
           >
             {/* You — the user, pinned at the top of the cast */}
@@ -198,40 +197,21 @@ export function CharacterManager({
                 alignItems: "center",
                 gap: 10,
                 padding: 8,
-                borderRadius: 8,
+                borderRadius: 10,
                 cursor: "pointer",
-                border: `1px solid ${editingUser ? theme.colors.info : theme.colors.border}`,
-                background: editingUser ? `${theme.colors.info}14` : "transparent",
+                border: `1px solid ${editingUser ? theme.colors.primary : "transparent"}`,
+                background: editingUser ? theme.colors.primaryLight : "transparent",
               }}
             >
-              <span
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: "50%",
-                  overflow: "hidden",
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 18,
-                  background: userAvatar ? "transparent" : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                }}
-              >
-                {userAvatar ? (
-                  <img src={userAvatar} alt={userName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                ) : (
-                  "👤"
-                )}
-              </span>
+              <PortraitDisc image={userAvatar} label={userName || "You"} tint={theme.colors.primary} theme={theme} size={36} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: theme.colors.textPrimary }}>
                   {userName || "You"}
                 </div>
-                <div style={{ fontSize: 11, color: theme.colors.info, fontWeight: 600 }}>You · always present</div>
+                <div style={{ fontSize: 10.5, color: theme.colors.primary, fontWeight: 600 }}>You · always present</div>
               </div>
             </div>
-            <div style={{ height: 1, background: theme.colors.border, margin: "4px 0" }} />
+            <div style={{ height: 1, background: theme.colors.borderLight, margin: "4px 0" }} />
 
             {characters.map((c) => {
               const active = !editingUser && c.id === selectedId;
@@ -244,34 +224,15 @@ export function CharacterManager({
                     alignItems: "center",
                     gap: 10,
                     padding: 8,
-                    borderRadius: 8,
+                    borderRadius: 10,
                     cursor: "pointer",
                     border: `1px solid ${active ? theme.colors.secondary : "transparent"}`,
-                    background: active ? `${theme.colors.secondary}14` : "transparent",
+                    background: active ? `color-mix(in srgb, ${theme.colors.secondary} 10%, transparent)` : "transparent",
                   }}
                 >
-                  <span
-                    style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: "50%",
-                      overflow: "hidden",
-                      flexShrink: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 18,
-                      background: c.avatar ? "transparent" : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-                    }}
-                  >
-                    {c.avatar ? (
-                      <img src={c.avatar} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    ) : (
-                      "🤖"
-                    )}
-                  </span>
+                  <PortraitDisc image={c.avatar} label={c.name} tint={theme.colors.secondary} theme={theme} size={36} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: theme.colors.textPrimary }}>
                       {c.name || "Unnamed"}
                     </div>
                     <label
@@ -290,37 +251,20 @@ export function CharacterManager({
               );
             })}
             <button
+              className="btn btn-ghost"
               onClick={() => { setEditingUser(false); onAdd(); }}
-              style={{
-                marginTop: 4,
-                padding: "8px 12px",
-                fontSize: 13,
-                fontWeight: 600,
-                borderRadius: 8,
-                border: `1px dashed ${theme.colors.border}`,
-                background: "transparent",
-                color: theme.colors.textSecondary,
-                cursor: "pointer",
-              }}
+              style={{ marginTop: 6, borderStyle: "dashed", justifyContent: "flex-start" }}
             >
-              ＋ Add character
+              <IconPlus size={14} /> Add character
             </button>
             <input ref={cardInputRef} type="file" accept=".json" onChange={onImportCard} style={{ display: "none" }} />
             <button
+              className="btn btn-ghost"
               onClick={() => cardInputRef.current?.click()}
               title="Import a SillyTavern-compatible character card as a new character"
-              style={{
-                padding: "8px 12px",
-                fontSize: 13,
-                fontWeight: 600,
-                borderRadius: 8,
-                border: `1px dashed ${theme.colors.border}`,
-                background: "transparent",
-                color: theme.colors.textSecondary,
-                cursor: "pointer",
-              }}
+              style={{ borderStyle: "dashed", justifyContent: "flex-start" }}
             >
-              📤 Import card
+              <IconUpload size={14} /> Import card
             </button>
           </div>
 
@@ -330,39 +274,14 @@ export function CharacterManager({
               <div>
                 <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
                   <div style={{ textAlign: "center" }}>
-                    <div
-                      style={{
-                        width: 84,
-                        height: 84,
-                        borderRadius: "50%",
-                        overflow: "hidden",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: 34,
-                        background: userAvatar ? "transparent" : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                        border: `2px solid ${theme.colors.border}`,
-                      }}
-                    >
-                      {userAvatar ? (
-                        <img src={userAvatar} alt={userName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      ) : (
-                        "👤"
-                      )}
-                    </div>
+                    <PortraitDisc image={userAvatar} label={userName || "You"} tint={theme.colors.primary} theme={theme} />
                     <input ref={userAvatarInputRef} type="file" accept="image/*" onChange={handleUserAvatarUpload} style={{ display: "none" }} />
                     <div style={{ marginTop: 6, display: "flex", gap: 4, justifyContent: "center" }}>
-                      <button
-                        onClick={() => userAvatarInputRef.current?.click()}
-                        style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "none", background: theme.colors.buttonSecondary, color: theme.colors.textPrimary, cursor: "pointer", fontWeight: 600 }}
-                      >
+                      <button className="btn btn-quiet" onClick={() => userAvatarInputRef.current?.click()} style={{ padding: "3px 9px", fontSize: 11 }}>
                         Upload
                       </button>
                       {userAvatar && (
-                        <button
-                          onClick={() => onUserAvatarChange(null)}
-                          style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "none", background: theme.colors.buttonSecondary, color: theme.colors.textPrimary, cursor: "pointer", fontWeight: 600 }}
-                        >
+                        <button className="btn btn-quiet" onClick={() => onUserAvatarChange(null)} style={{ padding: "3px 9px", fontSize: 11 }}>
                           Remove
                         </button>
                       )}
@@ -370,17 +289,18 @@ export function CharacterManager({
                   </div>
                   <div style={{ flex: 1 }}>
                     <label style={labelStyle}>Your name</label>
-                    <input type="text" value={userName} onChange={(e) => onUserNameChange(e.target.value)} style={fieldStyle as React.CSSProperties} />
-                    <div style={{ marginTop: 8, fontSize: 12, color: theme.colors.info, fontWeight: 600 }}>
-                      👤 This is you. You are always in the scene, and the AI never speaks as you (use “As Me” to have it draft a line for you).
+                    <input type="text" className="input" value={userName} onChange={(e) => onUserNameChange(e.target.value)} style={{ width: "100%" }} />
+                    <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5, color: theme.colors.textTertiary }}>
+                      This is you. You're always in the scene, and the AI never speaks as you — use
+                      <em> Write for me</em> to have it draft a line you can edit.
                     </div>
                   </div>
                 </div>
                 <div>
                   <label style={labelStyle}>
-                    Your persona <span style={{ fontWeight: 400, color: theme.colors.textTertiary }}>(optional)</span>
+                    Your persona <span style={hint}>(optional)</span>
                   </label>
-                  <textarea value={userPersona} onChange={(e) => onUserPersonaChange(e.target.value)} rows={4} style={fieldStyle as React.CSSProperties} placeholder="Who are you in this story? Appearance, background, how the characters see you… Injected into the scene so characters know who they're talking to." />
+                  <textarea className="input" value={userPersona} onChange={(e) => onUserPersonaChange(e.target.value)} rows={4} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Who are you in this story? Appearance, background, how the characters see you… Injected into the scene so characters know who they're talking to." />
                 </div>
               </div>
             ) : (
@@ -388,39 +308,14 @@ export function CharacterManager({
             <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 16 }}>
               {/* Avatar */}
               <div style={{ textAlign: "center" }}>
-                <div
-                  style={{
-                    width: 84,
-                    height: 84,
-                    borderRadius: "50%",
-                    overflow: "hidden",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 34,
-                    background: avatar ? "transparent" : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-                    border: `2px solid ${theme.colors.border}`,
-                  }}
-                >
-                  {avatar ? (
-                    <img src={avatar} alt={name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  ) : (
-                    "🤖"
-                  )}
-                </div>
+                <PortraitDisc image={avatar} label={name} tint={theme.colors.secondary} theme={theme} />
                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handleAvatarUpload} style={{ display: "none" }} />
                 <div style={{ marginTop: 6, display: "flex", gap: 4, justifyContent: "center" }}>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "none", background: theme.colors.buttonSecondary, color: theme.colors.textPrimary, cursor: "pointer", fontWeight: 600 }}
-                  >
+                  <button className="btn btn-quiet" onClick={() => fileInputRef.current?.click()} style={{ padding: "3px 9px", fontSize: 11 }}>
                     Upload
                   </button>
                   {avatar && (
-                    <button
-                      onClick={() => onAvatarChange(null)}
-                      style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "none", background: theme.colors.buttonSecondary, color: theme.colors.textPrimary, cursor: "pointer", fontWeight: 600 }}
-                    >
+                    <button className="btn btn-quiet" onClick={() => onAvatarChange(null)} style={{ padding: "3px 9px", fontSize: 11 }}>
                       Remove
                     </button>
                   )}
@@ -430,54 +325,53 @@ export function CharacterManager({
               {/* Name + actions */}
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Name</label>
-                <input type="text" value={name} onChange={(e) => onNameChange(e.target.value)} style={fieldStyle as React.CSSProperties} />
+                <input type="text" className="input" value={name} onChange={(e) => onNameChange(e.target.value)} style={{ width: "100%" }} />
                 <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <button
-                    onClick={() => onDuplicate(selectedId)}
-                    style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, border: `1px solid ${theme.colors.border}`, background: theme.colors.surface, color: theme.colors.textPrimary, cursor: "pointer", fontWeight: 600 }}
-                  >
-                    ⧉ Duplicate
+                  <button className="btn btn-quiet" onClick={() => onDuplicate(selectedId)} style={{ padding: "5px 10px", fontSize: 12 }}>
+                    <IconCopy size={13} /> Duplicate
                   </button>
                   <button
+                    className="btn btn-quiet"
                     onClick={() => onGreet(selectedId)}
                     disabled={!connected || !firstMessage.trim()}
                     title={firstMessage.trim() ? "Post this character's first message into the chat" : "Set a first message below to enable"}
-                    style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, border: `1px solid ${theme.colors.border}`, background: theme.colors.surface, color: connected && firstMessage.trim() ? theme.colors.textPrimary : theme.colors.textTertiary, cursor: connected && firstMessage.trim() ? "pointer" : "not-allowed", fontWeight: 600 }}
+                    style={{ padding: "5px 10px", fontSize: 12 }}
                   >
-                    💬 Use first message
+                    <IconMessage size={13} /> Use first message
                   </button>
                   <button
+                    className="btn btn-danger"
                     onClick={() => onDelete(selectedId)}
                     disabled={characters.length <= 1}
                     title={characters.length <= 1 ? "Keep at least one character" : "Delete this character"}
-                    style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, border: "none", background: characters.length <= 1 ? theme.colors.buttonDisabled : theme.colors.error, color: "white", cursor: characters.length <= 1 ? "not-allowed" : "pointer", fontWeight: 600 }}
+                    style={{ padding: "5px 10px", fontSize: 12 }}
                   >
-                    🗑️ Delete
+                    <IconTrash size={13} /> Delete
                   </button>
                 </div>
               </div>
             </div>
 
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Description / Definition</label>
-              <textarea value={description} onChange={(e) => onDescriptionChange(e.target.value)} rows={4} style={fieldStyle as React.CSSProperties} placeholder="Who is this character — appearance, background, traits, how they speak…" />
+              <label style={labelStyle}>Description / definition</label>
+              <textarea className="input" value={description} onChange={(e) => onDescriptionChange(e.target.value)} rows={4} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Who is this character — appearance, background, traits, how they speak…" />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Personality</label>
-              <textarea value={personality} onChange={(e) => onPersonalityChange(e.target.value)} rows={2} style={fieldStyle as React.CSSProperties} placeholder="Core personality traits…" />
+              <textarea className="input" value={personality} onChange={(e) => onPersonalityChange(e.target.value)} rows={2} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Core personality traits…" />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>
-                System instruction <span style={{ fontWeight: 400, color: theme.colors.textTertiary }}>(per-character, optional — overrides the global one)</span>
+                System instruction <span style={hint}>(per-character, optional — overrides the global one)</span>
               </label>
-              <textarea value={systemPrompt} onChange={(e) => onSystemPromptChange(e.target.value)} rows={3} style={fieldStyle as React.CSSProperties} placeholder="Leave blank to use the global system prompt. Set this to give this character their own base instructions." />
+              <textarea className="input" value={systemPrompt} onChange={(e) => onSystemPromptChange(e.target.value)} rows={3} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Leave blank to use the global system prompt. Set this to give this character their own base instructions." />
             </div>
 
             <div>
               <label style={labelStyle}>First message</label>
-              <textarea value={firstMessage} onChange={(e) => onFirstMessageChange(e.target.value)} rows={3} style={fieldStyle as React.CSSProperties} placeholder="An opening line this character can greet with (use the button above to post it)." />
+              <textarea className="input" value={firstMessage} onChange={(e) => onFirstMessageChange(e.target.value)} rows={3} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="An opening line this character can greet with (use the button above to post it)." />
             </div>
             </>
             )}

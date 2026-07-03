@@ -1,8 +1,6 @@
 import { LorebookEntry } from "./types";
 
-/** Trigger a browser download of an object serialized as pretty JSON. */
-export function downloadJson(filename: string, obj: unknown) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -11,6 +9,16 @@ export function downloadJson(filename: string, obj: unknown) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/** Trigger a browser download of an object serialized as pretty JSON. */
+export function downloadJson(filename: string, obj: unknown) {
+  downloadBlob(filename, new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" }));
+}
+
+/** Trigger a browser download of plain text (e.g. an exported Markdown story). */
+export function downloadText(filename: string, text: string, mime = "text/markdown") {
+  downloadBlob(filename, new Blob([text], { type: `${mime};charset=utf-8` }));
 }
 
 /** Read a File as parsed JSON. Rejects on invalid JSON. */

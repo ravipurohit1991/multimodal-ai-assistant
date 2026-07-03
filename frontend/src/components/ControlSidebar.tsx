@@ -1,6 +1,11 @@
 import { useRef } from "react";
 import { OutputMode, TtsEngine, VoiceInfo } from "../types";
 import { Theme } from "../theme";
+import {
+  IconSun, IconMoon, IconPower, IconRefresh, IconHistory,
+  IconSave, IconFolder, IconDownload, IconCode, IconActivity, IconAlert,
+  IconFeather,
+} from "./Icons";
 
 interface ControlSidebarProps {
   connected: boolean;
@@ -32,7 +37,28 @@ interface ControlSidebarProps {
   onImageExplainerModelChange: (model: string) => void;
   onSaveSession: () => void;
   onLoadSession: (file: File) => void;
+  /** Open the server-side story library (saved sessions). */
+  onOpenSessions: () => void;
+  /** Download the conversation as a formatted Markdown story. */
+  onExportStory: () => void;
   onWipeEverything: () => void;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ padding: "14px 18px 16px" }}>
+      <div className="label-caps" style={{ marginBottom: 10 }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function FieldLabel({ children, theme }: { children: React.ReactNode; theme: Theme }) {
+  return (
+    <label style={{ display: "block", marginBottom: 4, fontSize: 11.5, fontWeight: 500, color: theme.colors.textSecondary }}>
+      {children}
+    </label>
+  );
 }
 
 export function ControlSidebar({
@@ -41,10 +67,8 @@ export function ControlSidebar({
   llmModel,
   availableModels,
   outputMode,
-  ttsEngine,
-  useContext,
-  showJsonPayload,
   showModelStatus,
+  showJsonPayload,
   theme,
   themeName,
   imageExplainerProvider,
@@ -62,166 +86,101 @@ export function ControlSidebar({
   onThemeChange,
   onSaveSession,
   onLoadSession,
+  onOpenSessions,
+  onExportStory,
   onWipeEverything
 }: ControlSidebarProps) {
   const sessionFileRef = useRef<HTMLInputElement>(null);
+  const divider = <div style={{ height: 1, background: theme.colors.borderLight, margin: "0 18px" }} />;
 
   return (
     <div style={{
-      width: 380,
+      width: 320,
       background: theme.colors.surface,
       borderRight: `1px solid ${theme.colors.border}`,
       display: "flex",
       flexDirection: "column",
-      overflow: "auto"
+      overflow: "auto",
+      flexShrink: 0,
     }}>
-      {/* Header */}
+      {/* Wordmark */}
       <div style={{
-        padding: "20px 24px",
+        padding: "16px 18px",
         borderBottom: `1px solid ${theme.colors.border}`,
-        background: theme.colors.surface
+        display: "flex",
+        alignItems: "center",
+        gap: 11,
       }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: theme.colors.textPrimary }}>
-              Multimodal AI Assistant
-            </h2>
-            <p style={{ margin: "4px 0 0 0", fontSize: 11, color: theme.colors.textSecondary }}>
-              Version 1.0 • Privacy-First AI
-            </p>
-          </div>
-          {/* Theme Toggle */}
-          <button
-            onClick={() => onThemeChange(themeName === 'light' ? 'dark' : 'light')}
-            title={`Switch to ${themeName === 'light' ? 'dark' : 'light'} mode`}
-            style={{
-              background: "transparent",
-              border: "none",
-              fontSize: 20,
-              cursor: "pointer",
-              padding: "8px",
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "background 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.primaryLight}
-            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
-          >
-            {themeName === 'light' ? '🌙' : '☀️'}
-          </button>
-        </div>
-      </div>
-
-      {/* Connection Status */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
-        {!connected ? (
-          <button
-            onClick={onConnect}
-            style={{
-              width: "100%",
-              fontSize: 14,
-              padding: "10px 14px",
-              background: theme.colors.buttonPrimary,
-              color: "white",
-              border: "none",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontWeight: 600,
-              boxShadow: theme.colors.shadowSm,
-              transition: "all 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.buttonPrimaryHover}
-            onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.buttonPrimary}
-          >
-            🔌 Connect
-          </button>
-        ) : (
-          <button
-            onClick={onDisconnect}
-            style={{
-              width: "100%",
-              fontSize: 14,
-              padding: "10px 14px",
-              background: theme.colors.error,
-              color: "white",
-              border: "none",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontWeight: 600,
-              transition: "opacity 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-          >
-            🔌 Disconnect
-          </button>
-        )}
         <div style={{
-          marginTop: 8,
-          textAlign: "center",
-          fontSize: 12,
-          color: connected ? theme.colors.success : theme.colors.textTertiary,
-          fontWeight: 600
+          width: 34,
+          height: 34,
+          borderRadius: 10,
+          background: theme.colors.primaryLight,
+          color: theme.colors.primary,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
         }}>
-          {connected ? "● Connected" : "○ Not Connected"}
+          <IconFeather size={17} />
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: theme.colors.textPrimary, letterSpacing: 0.1 }}>
+            Multimodal AI Assistant
+          </div>
+          <div style={{ fontSize: 10.5, color: theme.colors.textTertiary, marginTop: 1 }}>
+            Local · private · yours
+          </div>
+        </div>
+        <button
+          className="icon-btn"
+          onClick={() => onThemeChange(themeName === 'light' ? 'dark' : 'light')}
+          title={`Switch to ${themeName === 'light' ? 'dark' : 'light'} theme`}
+        >
+          {themeName === 'light' ? <IconMoon size={16} /> : <IconSun size={16} />}
+        </button>
+      </div>
+
+      {/* Connection */}
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${theme.colors.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="live-dot" data-on={connected} />
+          <span style={{ fontSize: 12.5, fontWeight: 500, color: connected ? theme.colors.textPrimary : theme.colors.textTertiary, flex: 1 }}>
+            {connected ? "Connected" : "Not connected"}
+          </span>
+          {!connected ? (
+            <button className="btn btn-primary" onClick={onConnect} style={{ padding: "6px 16px" }}>
+              <IconPower size={14} /> Connect
+            </button>
+          ) : (
+            <button className="btn btn-ghost" onClick={onDisconnect} style={{ padding: "6px 12px" }}>
+              Disconnect
+            </button>
+          )}
         </div>
       </div>
 
-      {/* LLM Configuration */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
-        <label style={{
-          display: "block",
-          fontSize: 11,
-          fontWeight: 700,
-          marginBottom: 10,
-          color: theme.colors.textPrimary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px"
-        }}>
-          🤖 LLM Configuration
-        </label>
-
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
-            LLM Host URL:
-          </label>
+      {/* Language model */}
+      <Section title="Language model">
+        <div style={{ marginBottom: 10 }}>
+          <FieldLabel theme={theme}>Host</FieldLabel>
           <input
             type="text"
+            className="input"
             value={llmHost}
             onChange={(e) => onLlmHostChange(e.target.value)}
             placeholder="http://localhost:11434"
-            style={{
-              width: "100%",
-              padding: "8px",
-              fontSize: 12,
-              border: `1px solid ${theme.colors.border}`,
-              borderRadius: 6,
-              background: theme.colors.surface,
-              color: theme.colors.textPrimary
-            }}
+            style={{ width: "100%", fontSize: 12 }}
           />
         </div>
-
-        <div>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
-            LLM Model:
-          </label>
+        <FieldLabel theme={theme}>Model</FieldLabel>
+        <div style={{ display: "flex", gap: 6 }}>
           <select
+            className="input"
             value={llmModel}
             onChange={(e) => onLlmModelChange(e.target.value)}
             disabled={!connected}
-            style={{
-              width: "100%",
-              padding: "8px",
-              fontSize: 12,
-              border: `1px solid ${theme.colors.border}`,
-              borderRadius: 6,
-              cursor: connected ? "pointer" : "not-allowed",
-              background: theme.colors.surface,
-              color: theme.colors.textPrimary
-            }}
+            style={{ flex: 1, fontSize: 12, minWidth: 0 }}
           >
             {availableModels.length > 0 ? (
               availableModels.map(m => <option key={m} value={m}>{m}</option>)
@@ -229,99 +188,40 @@ export function ControlSidebar({
               <option value={llmModel}>{llmModel}</option>
             )}
           </select>
-          <button
-            onClick={onRefreshModels}
-            style={{
-              fontSize: 11,
-              padding: "6px 12px",
-              marginTop: 6,
-              background: theme.colors.buttonSecondary,
-              color: theme.colors.textPrimary,
-              border: `1px solid ${theme.colors.border}`,
-              borderRadius: 6,
-              cursor: "pointer",
-              fontWeight: 600,
-              transition: "background 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.buttonSecondaryHover}
-            onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.buttonSecondary}
-          >
-            🔄 Refresh Models
+          <button className="icon-btn" onClick={onRefreshModels} title="Refresh model list">
+            <IconRefresh size={15} />
           </button>
         </div>
-      </div>
+      </Section>
 
-      {/* Image Explainer Configuration */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
-        <label style={{
-          display: "block",
-          fontSize: 11,
-          fontWeight: 700,
-          marginBottom: 10,
-          color: theme.colors.textPrimary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px"
-        }}>
-          👁️ Image Explainer
-        </label>
+      {divider}
 
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
-            Provider:
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={() => onImageExplainerProviderChange("local")}
-              style={{
-                flex: 1,
-                padding: "8px",
-                fontSize: 12,
-                background: imageExplainerProvider === "local" ? theme.colors.primaryLight : theme.colors.surface,
-                border: `1px solid ${imageExplainerProvider === "local" ? theme.colors.primary : theme.colors.border}`,
-                borderRadius: 6,
-                cursor: "pointer",
-                color: theme.colors.textPrimary,
-                fontWeight: imageExplainerProvider === "local" ? 600 : 400
-              }}
-            >
-              Local (Qwen3-VL)
-            </button>
-            <button
-              onClick={() => onImageExplainerProviderChange("ollama")}
-              style={{
-                flex: 1,
-                padding: "8px",
-                fontSize: 12,
-                background: imageExplainerProvider === "ollama" ? theme.colors.primaryLight : theme.colors.surface,
-                border: `1px solid ${imageExplainerProvider === "ollama" ? theme.colors.primary : theme.colors.border}`,
-                borderRadius: 6,
-                cursor: "pointer",
-                color: theme.colors.textPrimary,
-                fontWeight: imageExplainerProvider === "ollama" ? 600 : 400
-              }}
-            >
-              Ollama
-            </button>
-          </div>
+      {/* Vision */}
+      <Section title="Vision (image understanding)">
+        <div className="seg" style={{ display: "flex", width: "100%" }}>
+          <button
+            style={{ flex: 1 }}
+            data-active={imageExplainerProvider === "local"}
+            onClick={() => onImageExplainerProviderChange("local")}
+          >
+            Local (Qwen-VL)
+          </button>
+          <button
+            style={{ flex: 1 }}
+            data-active={imageExplainerProvider === "ollama"}
+            onClick={() => onImageExplainerProviderChange("ollama")}
+          >
+            Ollama
+          </button>
         </div>
-
         {imageExplainerProvider === "ollama" && (
-          <div>
-            <label style={{ display: "block", marginBottom: 4, fontSize: 11, fontWeight: 600, color: theme.colors.textSecondary }}>
-              Ollama Model:
-            </label>
+          <div style={{ marginTop: 10 }}>
+            <FieldLabel theme={theme}>Ollama vision model</FieldLabel>
             <select
+              className="input"
               value={imageExplainerModel}
               onChange={(e) => onImageExplainerModelChange(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "8px",
-                fontSize: 12,
-                border: `1px solid ${theme.colors.border}`,
-                borderRadius: 6,
-                background: theme.colors.surface,
-                color: theme.colors.textPrimary
-              }}
+              style={{ width: "100%", fontSize: 12 }}
             >
               {availableModels.length > 0 ? (
                 availableModels.map(m => <option key={m} value={m}>{m}</option>)
@@ -329,113 +229,33 @@ export function ControlSidebar({
                 <option value={imageExplainerModel}>{imageExplainerModel}</option>
               )}
             </select>
-            <p style={{ margin: "4px 0 0 0", fontSize: 10, color: theme.colors.warning }}>
-              * Ensure selected model supports vision
+            <p style={{ margin: "5px 0 0", fontSize: 10.5, color: theme.colors.warning }}>
+              Pick a model that supports vision
             </p>
           </div>
         )}
-      </div>
+      </Section>
 
-      {/* Output Mode Selection */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
-        <label style={{
-          display: "block",
-          fontSize: 11,
-          fontWeight: 700,
-          marginBottom: 10,
-          color: theme.colors.textPrimary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px"
-        }}>
-          Output Mode
-        </label>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <label style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 12px",
-            background: outputMode === "voice" ? theme.colors.primaryLight : theme.colors.surface,
-            border: `2px solid ${outputMode === "voice" ? theme.colors.primary : theme.colors.border}`,
-            borderRadius: 8,
-            cursor: "pointer",
-            transition: "all 0.2s"
-          }}>
-            <input
-              type="radio"
-              checked={outputMode === "voice"}
-              onChange={() => onOutputModeChange("voice")}
-              style={{ width: 16, height: 16, cursor: "pointer" }}
-            />
-            <span style={{ fontSize: 18 }}>🔊</span>
-            <span style={{ fontWeight: 600, fontSize: 13, color: theme.colors.textPrimary }}>Voice Output</span>
-          </label>
-          <label style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 12px",
-            background: outputMode === "text" ? theme.colors.primaryLight : theme.colors.surface,
-            border: `2px solid ${outputMode === "text" ? theme.colors.primary : theme.colors.border}`,
-            borderRadius: 8,
-            cursor: "pointer",
-            transition: "all 0.2s"
-          }}>
-            <input
-              type="radio"
-              checked={outputMode === "text"}
-              onChange={() => onOutputModeChange("text")}
-              style={{ width: 16, height: 16, cursor: "pointer" }}
-            />
-            <span style={{ fontSize: 18 }}>📝</span>
-            <span style={{ fontWeight: 600, fontSize: 13, color: theme.colors.textPrimary }}>Text Output</span>
-          </label>
-        </div>
-      </div>
+      {divider}
 
-      {/* Privacy Notice */}
-      <div style={{
-        margin: "16px 24px",
-        padding: "14px",
-        background: theme.colors.infoLight,
-        borderRadius: 8,
-        fontSize: 11,
-        lineHeight: 1.5,
-        border: `1px solid ${theme.colors.info}`
-      }}>
-        <div style={{ fontWeight: 700, marginBottom: 8, color: theme.colors.info }}>
-          🔒 Privacy & Pipeline Info
+      {/* Replies */}
+      <Section title="Replies">
+        <div className="seg" style={{ display: "flex", width: "100%" }}>
+          <button style={{ flex: 1 }} data-active={outputMode === "text"} onClick={() => onOutputModeChange("text")}>
+            Text
+          </button>
+          <button style={{ flex: 1 }} data-active={outputMode === "voice"} onClick={() => onOutputModeChange("voice")}>
+            Voice + text
+          </button>
         </div>
-        <div style={{ color: theme.colors.textSecondary }}>
-          <div style={{ marginBottom: 6 }}>
-            <strong>Pipeline:</strong> 🎤 Speech-to-Text → 🤖 LLM → 🔊 Text-to-Speech
-          </div>
-          <div style={{ marginBottom: 6 }}>
-            <strong>Local Processing:</strong> Whisper STT & {outputMode === "voice" ? `${ttsEngine.charAt(0).toUpperCase() + ttsEngine.slice(1)} TTS` : "Text"} run 100% locally
-          </div>
-          <div>
-            <strong>Model:</strong> {llmModel}
-            {!useContext && <span style={{ marginLeft: 8, color: theme.colors.warning, fontWeight: 600 }}>⚠️ Context disabled</span>}
-          </div>
-        </div>
-      </div>
+      </Section>
 
-      {/* Session Save / Load */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${theme.colors.border}` }}>
-        <label style={{
-          display: "block",
-          fontSize: 11,
-          fontWeight: 700,
-          marginBottom: 10,
-          color: theme.colors.textPrimary,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px"
-        }}>
-          💾 Session
-        </label>
-        <p style={{ margin: "0 0 10px 0", fontSize: 11, color: theme.colors.textTertiary, lineHeight: 1.4 }}>
-          Save the whole chat, characters, lorebook and settings to a file — then load it later to continue where you
-          left off.
+      {divider}
+
+      {/* Story library */}
+      <Section title="Story library">
+        <p style={{ margin: "0 0 10px", fontSize: 11.5, color: theme.colors.textTertiary, lineHeight: 1.5 }}>
+          Park a whole story — chat, cast, lorebook &amp; settings — and pick it up later.
         </p>
         <input
           ref={sessionFileRef}
@@ -448,138 +268,71 @@ export function ControlSidebar({
           }}
           style={{ display: "none" }}
         />
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            onClick={onSaveSession}
-            style={{
-              flex: 1,
-              fontSize: 12,
-              padding: "8px",
-              background: theme.colors.buttonPrimary,
-              color: "white",
-              border: "none",
-              borderRadius: 6,
-              cursor: "pointer",
-              fontWeight: 600,
-              transition: "opacity 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-          >
-            💾 Save Session
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <button className="btn btn-quiet" onClick={onOpenSessions} style={{ justifyContent: "flex-start" }}>
+            <IconHistory size={15} /> Open library…
           </button>
-          <button
-            onClick={() => sessionFileRef.current?.click()}
-            style={{
-              flex: 1,
-              fontSize: 12,
-              padding: "8px",
-              background: theme.colors.buttonSecondary,
-              color: theme.colors.textPrimary,
-              border: `1px solid ${theme.colors.border}`,
-              borderRadius: 6,
-              cursor: "pointer",
-              fontWeight: 600,
-              transition: "background 0.2s"
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.buttonSecondaryHover}
-            onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.buttonSecondary}
-          >
-            📂 Load Session
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-quiet" onClick={onSaveSession} style={{ flex: 1 }} title="Download the session as a JSON file">
+              <IconSave size={14} /> Save file
+            </button>
+            <button className="btn btn-quiet" onClick={() => sessionFileRef.current?.click()} style={{ flex: 1 }} title="Load a session JSON file">
+              <IconFolder size={14} /> Load file
+            </button>
+          </div>
+          <button className="btn btn-quiet" onClick={onExportStory} style={{ justifyContent: "flex-start" }} title="Download the conversation as a readable Markdown story">
+            <IconDownload size={15} /> Export as story (.md)
           </button>
         </div>
-      </div>
+      </Section>
 
-      {/* Debug Info Button */}
-      <div style={{ padding: "16px 24px" }}>
-        <button
-          onClick={onToggleDebug}
-          style={{
-            width: "100%",
-            fontSize: 12,
-            padding: "8px",
-            background: theme.colors.buttonSecondary,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: 6,
-            cursor: "pointer",
-            fontWeight: 600,
-            color: theme.colors.textPrimary,
-            marginBottom: 8,
-            transition: "background 0.2s"
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = theme.colors.buttonSecondaryHover}
-          onMouseLeave={(e) => e.currentTarget.style.background = theme.colors.buttonSecondary}
-        >
-          🐛 Developer Debug Info
-        </button>
+      {divider}
 
-        <button
-          onClick={onToggleModelStatus}
-          style={{
-            width: "100%",
-            fontSize: 12,
-            padding: "8px",
-            background: showModelStatus ? theme.colors.buttonPrimary : theme.colors.buttonSecondary,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: 6,
-            cursor: "pointer",
-            fontWeight: 600,
-            color: showModelStatus ? "white" : theme.colors.textPrimary,
-            transition: "all 0.2s"
-          }}
-          onMouseEnter={(e) => {
-            if (!showModelStatus) {
-              e.currentTarget.style.background = theme.colors.buttonSecondaryHover;
-            } else {
-              e.currentTarget.style.opacity = "0.85";
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!showModelStatus) {
-              e.currentTarget.style.background = theme.colors.buttonSecondary;
-            } else {
-              e.currentTarget.style.opacity = "1";
-            }
-          }}
-        >
-          🔧 Model Status
-        </button>
-      </div>
+      {/* Under the hood */}
+      <Section title="Under the hood">
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            className="btn btn-quiet"
+            data-active={showJsonPayload}
+            onClick={onToggleDebug}
+            style={{ flex: 1, ...(showJsonPayload ? { background: theme.colors.primaryLight, color: theme.colors.primary } : {}) }}
+          >
+            <IconCode size={14} /> Debug
+          </button>
+          <button
+            className="btn btn-quiet"
+            onClick={onToggleModelStatus}
+            style={{ flex: 1, ...(showModelStatus ? { background: theme.colors.primaryLight, color: theme.colors.primary } : {}) }}
+          >
+            <IconActivity size={14} /> Models
+          </button>
+        </div>
+        <p style={{ margin: "12px 0 0", fontSize: 10.5, color: theme.colors.textTertiary, lineHeight: 1.55 }}>
+          Speech, vision &amp; image generation run on this machine. Your story never leaves it
+          unless you point the model host at a cloud endpoint.
+        </p>
+      </Section>
 
-      {/* Danger Zone — irreversible full wipe */}
+      <div style={{ flex: 1 }} />
+
+      {/* Danger zone — irreversible full wipe */}
       <div style={{
-        margin: "0 24px 20px 24px",
-        padding: 14,
-        borderRadius: 8,
-        border: `1px solid ${theme.colors.error}`,
+        margin: "10px 18px 16px",
+        padding: 12,
+        borderRadius: 12,
+        border: `1px solid color-mix(in srgb, ${theme.colors.error} 40%, transparent)`,
         background: theme.colors.errorLight,
       }}>
-        <div style={{ fontWeight: 700, fontSize: 11, letterSpacing: "0.5px", textTransform: "uppercase", color: theme.colors.error, marginBottom: 6 }}>
-          ⚠️ Danger Zone
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: theme.colors.error }}>
+          <IconAlert size={13} />
+          <span className="label-caps" style={{ color: theme.colors.error }}>Danger zone</span>
         </div>
-        <p style={{ margin: "0 0 10px 0", fontSize: 11, lineHeight: 1.5, color: theme.colors.textSecondary }}>
-          Erase everything — this chat, all characters &amp; your persona, lorebook, scene,
-          saved settings, and the app's images, uploaded characters &amp; logs on disk.
-          No undo.
+        <p style={{ margin: "0 0 10px", fontSize: 11, lineHeight: 1.5, color: theme.colors.textSecondary }}>
+          Erase everything — chat, cast, lorebook, settings, and all images, uploads,
+          sessions &amp; logs on disk. No undo.
         </p>
-        <button
-          onClick={onWipeEverything}
-          style={{
-            width: "100%",
-            fontSize: 13,
-            padding: "10px",
-            background: theme.colors.error,
-            color: "white",
-            border: "none",
-            borderRadius: 6,
-            cursor: "pointer",
-            fontWeight: 700,
-            transition: "opacity 0.2s",
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-          onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-        >
-          🧨 Wipe Everything
+        <button className="btn btn-danger" onClick={onWipeEverything} style={{ width: "100%" }}>
+          Wipe everything
         </button>
       </div>
     </div>
