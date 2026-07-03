@@ -10,9 +10,17 @@ Ever wanted an AI assistant, one that you can set a personality and interact ? O
 
 ## App Preview
 
-Here is the app running with demo conversation data, showing the local model controls, voice settings, scene/director tools, cast controls, realtime status, and chat composer:
+Here is the redesigned story workspace running with demo conversation data: local model controls, scene/director tools, live weather effects, auto-cast, reply stats, realtime voice controls, and the chat composer all in one view.
 
-![Multimodal AI Assistant app screenshot with demo conversation data](docs/app-screenshot.png)
+![Multimodal AI Assistant redesigned story workspace with demo conversation data](docs/app-screenshot.png)
+
+| Scene controls | Story library |
+| --- | --- |
+| ![Scene controls with time, weather, location, and auto-scene options](docs/scene-controls-screenshot.png) | ![Story library modal with saved local sessions](docs/story-library-screenshot.png) |
+
+| Cast & characters |
+| --- |
+| ![Cast and character manager showing per-character settings and in-scene toggles](docs/cast-manager-screenshot.png) |
 
 ## Key Features
 
