@@ -1,7 +1,7 @@
 {
   "name": "multimodal-ai-assistant",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/literata": "^5.2.8",
     "@ricky0123/vad-web": "^0.0.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

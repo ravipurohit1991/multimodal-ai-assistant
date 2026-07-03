@@ -1,5 +1,9 @@
 import { useRef } from "react";
 import { Theme } from "../theme";
+import {
+  IconSend, IconImage, IconSkipForward, IconWand, IconBulb, IconFeather,
+  IconX, IconAlert,
+} from "./Icons";
 
 interface TextInputAreaProps {
   connected: boolean;
@@ -22,57 +26,6 @@ interface TextInputAreaProps {
   onImpersonate: () => void;
   onSuggest: () => void;
   onPickSuggestion: (text: string) => void;
-}
-
-/** Compact, subtle button used for the secondary actions in the input toolbar. */
-function ToolButton({
-  onClick,
-  disabled,
-  title,
-  active,
-  theme,
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  title: string;
-  active?: boolean;
-  theme: Theme;
-  children: React.ReactNode;
-}) {
-  const background = disabled
-    ? theme.colors.buttonDisabled
-    : active
-      ? theme.colors.secondary
-      : theme.colors.buttonSecondary;
-  const color = disabled
-    ? theme.colors.textTertiary
-    : active
-      ? "white"
-      : theme.colors.textPrimary;
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      style={{
-        padding: "8px 14px",
-        fontSize: 13,
-        background,
-        color,
-        border: `1px solid ${active ? "transparent" : theme.colors.border}`,
-        borderRadius: 8,
-        cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: 600,
-        whiteSpace: "nowrap",
-        transition: "all 0.2s",
-      }}
-      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = active ? theme.colors.secondary : theme.colors.buttonSecondaryHover; }}
-      onMouseLeave={(e) => { if (!disabled) e.currentTarget.style.background = background; }}
-    >
-      {children}
-    </button>
-  );
 }
 
 export function TextInputArea({
@@ -99,7 +52,7 @@ export function TextInputArea({
 }: TextInputAreaProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       onSend();
@@ -109,27 +62,18 @@ export function TextInputArea({
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    // Check if it's an image
     if (!file.type.startsWith('image/')) {
       alert('Please select an image file');
       return;
     }
-
-    // Convert to base64
     const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      onImageAttach(base64);
-    };
+    reader.onload = () => onImageAttach(reader.result as string);
     reader.readAsDataURL(file);
   };
 
   const handleRemoveImage = () => {
     onImageAttach(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // Shared gating: AI-assist actions need an active connection and some history.
@@ -141,116 +85,84 @@ export function TextInputArea({
 
   return (
     <div style={{
-      padding: "20px 24px",
+      padding: "12px 20px 14px",
       borderTop: `1px solid ${theme.colors.border}`,
       background: theme.colors.surface
     }}>
       {inputError && (
         <div style={{
-          marginBottom: 12,
-          padding: "10px 12px",
-          border: `1px solid ${theme.colors.error}`,
+          marginBottom: 10,
+          padding: "9px 12px",
           borderRadius: 10,
-          background: `${theme.colors.error}22`,
+          background: theme.colors.errorLight,
+          borderLeft: `3px solid ${theme.colors.error}`,
           color: theme.colors.textPrimary,
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          fontSize: 13
+          gap: 10,
+          fontSize: 12.5
         }}>
-          <span>Backend error: {inputError}</span>
-          <button
-            onClick={onDismissError}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: theme.colors.textPrimary,
-              cursor: "pointer",
-              fontSize: 16,
-              lineHeight: 1,
-              padding: 0
-            }}
-            title="Dismiss"
-          >
-            ×
+          <span style={{ color: theme.colors.error, display: "inline-flex" }}><IconAlert size={15} /></span>
+          <span style={{ flex: 1 }}>{inputError}</span>
+          <button className="icon-btn sm" onClick={onDismissError} title="Dismiss">
+            <IconX size={13} />
           </button>
         </div>
       )}
 
-      {/* Image Preview */}
+      {/* Image attached to the next message */}
       {attachedImage && (
         <div style={{
-          marginBottom: 12,
-          padding: 8,
-          border: `2px solid ${theme.colors.secondary}`,
-          borderRadius: 8,
+          marginBottom: 10,
+          padding: 5,
+          border: `1px solid ${theme.colors.border}`,
+          borderRadius: 12,
           display: "inline-block",
-          position: "relative"
+          position: "relative",
+          background: theme.colors.surfaceElevated,
+          boxShadow: theme.colors.shadowSm,
         }}>
           <img
             src={attachedImage}
             alt="Attached"
-            style={{
-              maxWidth: 200,
-              maxHeight: 150,
-              borderRadius: 4,
-              display: "block"
-            }}
+            style={{ maxWidth: 180, maxHeight: 130, borderRadius: 8, display: "block" }}
           />
           <button
             onClick={handleRemoveImage}
+            title="Remove image"
             style={{
               position: "absolute",
-              top: 4,
-              right: 4,
-              background: theme.colors.error,
-              color: "white",
-              border: "none",
+              top: -7,
+              right: -7,
+              background: theme.colors.surfaceElevated,
+              color: theme.colors.textSecondary,
+              border: `1px solid ${theme.colors.border}`,
               borderRadius: "50%",
-              width: 24,
-              height: 24,
+              width: 22,
+              height: 22,
               cursor: "pointer",
-              fontSize: 14,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontWeight: "bold",
-              transition: "opacity 0.2s"
+              boxShadow: theme.colors.shadowSm,
             }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = "0.85"}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
           >
-            ✕
+            <IconX size={12} />
           </button>
         </div>
       )}
 
-      {/* Suggested replies — click a chip to drop it into the input */}
+      {/* Suggested replies — click a chip to drop it into the composer */}
       {suggestions.length > 0 && (
-        <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: theme.colors.textTertiary, fontWeight: 600 }}>💡 Suggestions:</span>
+        <div className="fade-up" style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <span className="label-caps">Ideas</span>
           {suggestions.map((s, i) => (
             <button
               key={i}
+              className="chip"
               onClick={() => onPickSuggestion(s)}
-              title="Use this reply"
-              style={{
-                padding: "6px 12px",
-                fontSize: 13,
-                background: theme.colors.primaryLight,
-                color: theme.colors.textPrimary,
-                border: `1px solid ${theme.colors.border}`,
-                borderRadius: 999,
-                cursor: "pointer",
-                maxWidth: 360,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                transition: "all 0.2s"
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = theme.colors.secondary; e.currentTarget.style.color = "white"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = theme.colors.primaryLight; e.currentTarget.style.color = theme.colors.textPrimary; }}
+              title={s}
+              style={{ maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" }}
             >
               {s}
             </button>
@@ -267,106 +179,77 @@ export function TextInputArea({
         style={{ display: "none" }}
       />
 
-      {/* Message composer */}
-      <textarea
-        value={textInput}
-        onChange={(e) => onTextChange(e.target.value)}
-        onKeyPress={handleKeyPress}
-        placeholder="Type your message... (Press Enter to send, Shift+Enter for new line)"
-        disabled={!connected}
-        rows={3}
-        style={{
-          width: "100%",
-          boxSizing: "border-box",
-          padding: "12px 16px",
-          fontSize: 14,
-          borderRadius: 12,
-          border: `2px solid ${theme.colors.border}`,
-          resize: "none",
-          fontFamily: "inherit",
-          outline: "none",
-          transition: "border-color 0.2s",
-          background: theme.colors.surface,
-          color: theme.colors.textPrimary
-        }}
-        onFocus={(e) => e.currentTarget.style.borderColor = theme.colors.secondary}
-        onBlur={(e) => e.currentTarget.style.borderColor = theme.colors.border}
-      />
-
-      {/* Action toolbar: compose helpers + AI assists on the left, primary Send on the right */}
-      <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        {/* Compose helper */}
-        <ToolButton
-          onClick={() => fileInputRef.current?.click()}
+      {/* The composer console */}
+      <div className="composer">
+        <textarea
+          value={textInput}
+          onChange={(e) => onTextChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Write your part of the story…  (Enter to send · Shift+Enter for a new line)"
           disabled={!connected}
-          title="Attach an image to your message"
-          active={!!attachedImage}
-          theme={theme}
-        >
-          {attachedImage ? "🖼️ Image ✓" : "🖼️ Image"}
-        </ToolButton>
+          rows={2}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px 8px" }}>
+          <button
+            className="icon-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!connected}
+            title="Attach an image"
+            data-active={!!attachedImage}
+          >
+            <IconImage size={16} />
+          </button>
 
-        {/* Divider between composing and AI assists */}
-        <div style={{ width: 1, height: 22, background: theme.colors.border, margin: "0 2px" }} />
+          <div style={{ width: 1, height: 20, background: theme.colors.border, margin: "0 4px" }} />
 
-        {/* AI assists (need an existing conversation) */}
-        <ToolButton
-          onClick={onContinue}
-          disabled={!connected || busy || !hasHistory}
-          title="Continue the scene (ask the character to keep going)"
-          theme={theme}
-        >
-          {isContinuing ? "⏳ Continuing…" : "▶️ Continue"}
-        </ToolButton>
-        <ToolButton
-          onClick={onImpersonate}
-          disabled={!connected || busy || !hasHistory}
-          title="Let the AI write a reply as you (impersonate)"
-          theme={theme}
-        >
-          {isImpersonating ? "⏳ Writing…" : "🎭 As Me"}
-        </ToolButton>
-        <ToolButton
-          onClick={onSuggest}
-          disabled={!connected || busy || !hasHistory}
-          title="Suggest a few replies you could send next"
-          theme={theme}
-        >
-          {isSuggesting ? "⏳ Thinking…" : "💡 Suggest"}
-        </ToolButton>
-        <ToolButton
-          onClick={onNarrate}
-          disabled={!canNarrate}
-          title="Send this as narration — an omniscient scene beat the character reacts to (not you speaking)"
-          theme={theme}
-        >
-          🎬 Narrate
-        </ToolButton>
+          {/* AI assists (need an existing conversation) */}
+          <button
+            className="btn btn-quiet"
+            onClick={onContinue}
+            disabled={!connected || busy || !hasHistory}
+            title="Ask the character to keep going"
+            style={{ padding: "5px 10px", fontSize: 12.5 }}
+          >
+            <IconSkipForward size={14} /> {isContinuing ? "Continuing…" : "Continue"}
+          </button>
+          <button
+            className="btn btn-quiet"
+            onClick={onImpersonate}
+            disabled={!connected || busy || !hasHistory}
+            title="Let the AI draft your next line (you can edit it before sending)"
+            style={{ padding: "5px 10px", fontSize: 12.5 }}
+          >
+            <IconWand size={14} /> {isImpersonating ? "Writing…" : "Write for me"}
+          </button>
+          <button
+            className="btn btn-quiet"
+            onClick={onSuggest}
+            disabled={!connected || busy || !hasHistory}
+            title="Suggest a few replies you could send"
+            style={{ padding: "5px 10px", fontSize: 12.5 }}
+          >
+            <IconBulb size={14} /> {isSuggesting ? "Thinking…" : "Ideas"}
+          </button>
+          <button
+            className="btn btn-quiet"
+            onClick={onNarrate}
+            disabled={!canNarrate}
+            title="Send as narration — an omniscient scene beat the character reacts to"
+            style={{ padding: "5px 10px", fontSize: 12.5 }}
+          >
+            <IconFeather size={14} /> Narrate
+          </button>
 
-        {/* Primary action */}
-        <button
-          onClick={onSend}
-          disabled={!canSend}
-          title="Send message (Enter)"
-          style={{
-            marginLeft: "auto",
-            padding: "10px 28px",
-            fontSize: 14,
-            background: canSend ? theme.colors.buttonPrimary : theme.colors.buttonDisabled,
-            color: "white",
-            border: "none",
-            borderRadius: 10,
-            cursor: canSend ? "pointer" : "not-allowed",
-            fontWeight: 700,
-            boxShadow: canSend ? theme.colors.shadowSm : "none",
-            transition: "all 0.2s",
-            whiteSpace: "nowrap"
-          }}
-          onMouseEnter={(e) => { if (canSend) e.currentTarget.style.background = theme.colors.buttonPrimaryHover; }}
-          onMouseLeave={(e) => { if (canSend) e.currentTarget.style.background = theme.colors.buttonPrimary; }}
-        >
-          {isSendingMessage ? "⏳ Sending…" : "📤 Send"}
-        </button>
+          <button
+            className="btn btn-primary"
+            onClick={onSend}
+            disabled={!canSend}
+            title="Send (Enter)"
+            style={{ marginLeft: "auto", padding: "7px 18px" }}
+          >
+            {isSendingMessage ? "Sending…" : "Send"} <IconSend size={14} />
+          </button>
+        </div>
       </div>
     </div>
   );

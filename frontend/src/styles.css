@@ -1,0 +1,454 @@
+/* ============================================================
+   Global stylesheet — base, utilities, and motion.
+   Colors come from CSS variables set by applyThemeToDocument()
+   in theme.ts, so everything here tracks the active theme.
+   ============================================================ */
+
+:root {
+  --bg: #12141d;
+  --surface: #181b26;
+  --elevated: #202534;
+  --text-1: #eceef4;
+  --text-2: #a9aebe;
+  --text-3: #747b8f;
+  --accent: #e0a458;
+  --accent-hover: #ecb976;
+  --accent-soft: rgba(224, 164, 88, 0.14);
+  --accent-ink: #221607;
+  --accent-2: #968ede;
+  --border: #2a2f40;
+  --border-light: #222634;
+  --field: rgba(255, 255, 255, 0.045);
+  --danger: #e5726f;
+  --danger-soft: rgba(229, 114, 111, 0.14);
+  --ok: #7fc98f;
+  --warn: #e3b341;
+  --info: #6aa6e8;
+  --btn-ghost: rgba(255, 255, 255, 0.055);
+  --btn-ghost-hover: rgba(255, 255, 255, 0.1);
+  --overlay: rgba(8, 9, 14, 0.66);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.5);
+  --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-prose: Literata, Georgia, serif;
+  --font-mono: 'IBM Plex Mono', Consolas, monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: inherit;
+}
+
+/* Focus — a visible limelight ring, keyboard only */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Scrollbars — slim, quiet */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track, transparent);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(255, 255, 255, 0.14));
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, rgba(255, 255, 255, 0.26));
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--accent);
+}
+
+/* ============================================================
+   Utility components
+   ============================================================ */
+
+/* Quiet square icon button — the app's default control */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--btn-ghost-hover);
+  color: var(--text-1);
+}
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.icon-btn[data-active='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon-btn.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.icon-btn.wide {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.1s ease;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--btn-ghost-hover);
+  color: var(--text-1);
+}
+.btn-quiet {
+  background: var(--btn-ghost);
+  color: var(--text-2);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--btn-ghost-hover);
+  color: var(--text-1);
+}
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+/* Pill chip (scene options, beats, suggestions) */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.chip:hover:not(:disabled) {
+  border-color: var(--text-3);
+  color: var(--text-1);
+}
+.chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.chip[data-active='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Segmented control */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--border-light);
+}
+.seg > button {
+  padding: 4px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.seg > button:hover:not(:disabled) {
+  color: var(--text-1);
+}
+.seg > button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.seg > button[data-active='true'] {
+  background: var(--elevated);
+  color: var(--text-1);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Text fields */
+.input {
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--field);
+  color: var(--text-1);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.input::placeholder {
+  color: var(--text-3);
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select.input {
+  cursor: pointer;
+}
+select.input:disabled {
+  cursor: not-allowed;
+}
+select.input option {
+  background: var(--elevated);
+  color: var(--text-1);
+}
+
+/* Small-caps section label */
+.label-caps {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Tiny mono metadata (timestamps, stats) */
+.meta-mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  color: var(--text-3);
+}
+
+/* Modal scaffolding */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fade-in 0.16s ease;
+}
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  animation: scale-in 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Message entrance */
+.fade-up {
+  animation: fade-up 0.24s ease both;
+}
+
+/* Composer console — textarea + toolbar in one framed box */
+.composer {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--field);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.composer textarea {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 12px 14px 4px;
+}
+.composer textarea::placeholder {
+  color: var(--text-3);
+}
+
+/* Compact icon button variant for in-message actions */
+.icon-btn.sm {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+/* Message action rows reveal on hover / keyboard focus */
+.msg-row .msg-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.msg-row:hover .msg-actions,
+.msg-row:focus-within .msg-actions {
+  opacity: 1;
+}
+
+/* Live indicator dot */
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.live-dot[data-on='true'] {
+  background: var(--ok);
+  box-shadow: 0 0 0 0 rgba(127, 201, 143, 0.5);
+  animation: pulse-dot 2.4s ease-out infinite;
+}
+.live-dot[data-on='false'] {
+  background: var(--text-3);
+  opacity: 0.5;
+}
+
+/* ============================================================
+   Keyframes
+   ============================================================ */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes pulse-dot {
+  0% { box-shadow: 0 0 0 0 rgba(127, 201, 143, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(127, 201, 143, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(127, 201, 143, 0); }
+}
+@keyframes rp-typing-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes rp-caret-blink {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Respect reduced motion: kill decorative animation, keep function */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

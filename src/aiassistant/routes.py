@@ -9,6 +9,7 @@ from fastapi import Body, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from PIL import Image
 
+from aiassistant import sessions
 from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
@@ -47,6 +48,54 @@ async def wipe_data(request: Request):
     except Exception as e:
         logger.error(f"Wipe (HTTP) failed: {e}", exc_info=True)
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+# ---------- Session library (server-side saved conversations) ----------
+
+
+async def list_sessions_route():
+    """List every stored session (lightweight summaries, newest first)."""
+    try:
+        return JSONResponse(content={"sessions": sessions.list_sessions()})
+    except Exception as e:
+        logger.error(f"Error listing sessions: {e}", exc_info=True)
+        return JSONResponse(content={"error": str(e), "sessions": []}, status_code=500)
+
+
+async def save_session_route(
+    session: dict = Body(..., embed=True),
+    name: str = Body("", embed=True),
+):
+    """Store a session snapshot (history + settings) in the library."""
+    try:
+        summary = sessions.save_session(session, name)
+        return JSONResponse(content={"success": True, "session": summary})
+    except Exception as e:
+        logger.error(f"Error saving session: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+async def get_session_route(session_id: str):
+    """Fetch one stored session, including its full payload."""
+    record = sessions.get_session(session_id)
+    if record is None:
+        return JSONResponse(content={"error": "Session not found"}, status_code=404)
+    return JSONResponse(content=record)
+
+
+async def rename_session_route(session_id: str, name: str = Body(..., embed=True)):
+    """Rename a stored session."""
+    summary = sessions.rename_session(session_id, name)
+    if summary is None:
+        return JSONResponse(content={"error": "Session not found"}, status_code=404)
+    return JSONResponse(content={"success": True, "session": summary})
+
+
+async def delete_session_route(session_id: str):
+    """Remove a stored session from the library."""
+    if not sessions.delete_session(session_id):
+        return JSONResponse(content={"error": "Session not found"}, status_code=404)
+    return JSONResponse(content={"success": True})
 
 
 async def get_model_status():

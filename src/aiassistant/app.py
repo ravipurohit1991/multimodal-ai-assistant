@@ -14,13 +14,18 @@ from fastapi.staticfiles import StaticFiles
 
 from aiassistant.config import config
 from aiassistant.routes import (
+    delete_session_route,
     edit_image,
     explain_image,
     generate_image,
     get_llm_models,
     get_model_status,
+    get_session_route,
     get_voices,
+    list_sessions_route,
+    rename_session_route,
     root,
+    save_session_route,
     synthesize_tts,
     wipe_data,
 )
@@ -50,6 +55,11 @@ app.post("/api/generate-image")(generate_image)
 app.post("/api/explain-image")(explain_image)
 app.post("/api/edit-image")(edit_image)
 app.post("/api/wipe")(wipe_data)
+app.get("/api/sessions")(list_sessions_route)
+app.post("/api/sessions")(save_session_route)
+app.get("/api/sessions/{session_id}")(get_session_route)
+app.post("/api/sessions/{session_id}/rename")(rename_session_route)
+app.delete("/api/sessions/{session_id}")(delete_session_route)
 app.websocket("/ws")(ws_endpoint)
 
 

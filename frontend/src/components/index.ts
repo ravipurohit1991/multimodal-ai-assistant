@@ -13,3 +13,4 @@ export { DirectorBar } from "./DirectorBar";
 export { SceneBar } from "./SceneBar";
 export { CastBar } from "./CastBar";
 export { CharacterManager } from "./CharacterManager";
+export { SessionsModal } from "./SessionsModal";

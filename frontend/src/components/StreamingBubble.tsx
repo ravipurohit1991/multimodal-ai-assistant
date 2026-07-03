@@ -1,10 +1,7 @@
 import { Theme } from "../theme";
 import { FormattedText } from "./FormattedText";
 import { moodToColor } from "../mood";
-
-// Book-like serif stack used in cinematic reading mode (mirrors MessageItem).
-const SERIF_STACK =
-  "'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif";
+import { Avatar } from "./MessageItem";
 
 interface StreamingBubbleProps {
   assistantName: string;
@@ -18,8 +15,8 @@ interface StreamingBubbleProps {
 
 /**
  * The live, in-conversation rendering of the assistant's reply as it streams
- * in — with an animated "typing" indicator before the first token. This makes
- * the exchange feel like the character is actually responding in the moment.
+ * in — typing dots before the first token, then prose with a blinking caret,
+ * so the character feels present and writing in the moment.
  */
 export function StreamingBubble({
   assistantName,
@@ -33,58 +30,37 @@ export function StreamingBubble({
   const accent = mood ? moodToColor(mood) : theme.colors.secondary;
 
   return (
-    <div style={{ marginBottom: 16, display: "flex", flexDirection: "row", gap: 12 }}>
-      {/* Keyframes for the typing dots + caret (injected once, scoped by name) */}
-      <style>{`
-        @keyframes rp-typing-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
-        @keyframes rp-caret-blink { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
-      `}</style>
+    <div className="fade-up" style={{ marginBottom: 16, display: "flex", flexDirection: "row", gap: 10 }}>
+      <Avatar image={assistantCharacterImage} name={assistantName} isUser={false} theme={theme} />
 
-      {/* Avatar */}
-      <div style={{
-        width: 40,
-        height: 40,
-        borderRadius: "50%",
-        background: assistantCharacterImage ? "transparent" : "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 20,
-        flexShrink: 0,
-        overflow: "hidden",
-        border: `2px solid ${accent}`
-      }}>
-        {assistantCharacterImage ? (
-          <img src={assistantCharacterImage} alt={assistantName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : (
-          "🤖"
-        )}
-      </div>
-
-      <div style={{ maxWidth: immersive ? "82%" : "70%", display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: theme.colors.textPrimary }}>{assistantName}</span>
-          <span style={{ fontSize: 11, color: theme.colors.textTertiary, fontStyle: "italic" }}>typing…</span>
+      <div style={{ maxWidth: immersive ? "82%" : "72%", minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "0 2px" }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: theme.colors.secondary }}>
+            {assistantName}
+          </span>
+          <span className="meta-mono" style={{ fontStyle: "italic" }}>writing…</span>
         </div>
 
         <div style={{
-          padding: immersive ? "14px 18px" : "12px 16px",
-          borderRadius: 12,
-          background: "white",
-          color: "#2d3748",
-          fontFamily: immersive ? SERIF_STACK : "inherit",
-          fontSize: immersive ? 15.5 : 14,
-          lineHeight: immersive ? 1.75 : 1.5,
+          padding: immersive ? "14px 18px" : "11px 15px",
+          borderRadius: 14,
+          borderTopLeftRadius: 5,
+          background: theme.colors.assistantBubble,
+          color: theme.colors.textPrimary,
+          fontFamily: theme.fonts.prose,
+          fontSize: immersive ? 15.5 : 14.5,
+          lineHeight: 1.7,
           whiteSpace: "pre-wrap",
-          boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-          border: "1px solid #e1e8ed",
-          borderLeft: `3px solid ${accent}`,
+          overflowWrap: "break-word",
+          boxShadow: theme.colors.shadowSm,
+          border: `1px solid ${theme.colors.border}`,
+          borderLeft: `2px solid ${accent}`,
           minHeight: 20
         }}>
           {text ? (
             <>
               {formattingEnabled ? (
-                <FormattedText text={text} theme={theme} dialogueColor="#4c51bf" actionColor="#6b7280" />
+                <FormattedText text={text} theme={theme} />
               ) : (
                 text
               )}
@@ -92,7 +68,7 @@ export function StreamingBubble({
                 display: "inline-block",
                 width: 7,
                 height: 15,
-                marginLeft: 2,
+                marginLeft: 3,
                 background: accent,
                 borderRadius: 1,
                 verticalAlign: "text-bottom",
@@ -103,8 +79,8 @@ export function StreamingBubble({
             <span style={{ display: "inline-flex", gap: 4, alignItems: "center", height: 18 }}>
               {[0, 1, 2].map((i) => (
                 <span key={i} style={{
-                  width: 7,
-                  height: 7,
+                  width: 6,
+                  height: 6,
                   borderRadius: "50%",
                   background: accent,
                   display: "inline-block",

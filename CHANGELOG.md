@@ -8,13 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Nothing yet
+- **Story library** — save whole sessions (chat, cast, lorebook, settings) server-side under
+  `user_data/sessions` and reopen them later from a new "Story library" modal
+  (`GET/POST/DELETE /api/sessions`). File-based save/load still works.
+- **Auto-cast** — in group scenes, a new "Auto" toggle lets the model direct turn-taking:
+  the backend (`choose_speaker`) picks which character naturally answers each message.
+- **Living stage** — the conversation backdrop now renders the scene: rain, storm with
+  lightning, snow, fog, wind, stars at night, and fireflies at dusk (canvas particles,
+  reduced-motion aware, toggleable from the Scene bar).
+- **Scene ambience** — synthesized soundscapes (rain, thunder rolls, wind, snow hush,
+  night crickets) generated locally with WebAudio; volume slider in the Scene bar.
+- **Export as story** — download the conversation as a formatted Markdown story.
+- **Generation stats** — each reply shows generation time and tokens/second, reported by
+  the backend in `assistant_end`.
 
 ### Changed
-- Nothing yet
+- **Complete UI redesign** ("ink & limelight"): dark-first theme with an amber accent,
+  bundled fonts (IBM Plex Sans for UI, Literata for story prose, Plex Mono for data),
+  a consistent SVG icon set replacing emoji buttons, quiet hover-revealed message
+  actions, a framed composer console, slimmer bars, and restyled modals/panels.
+  Global design tokens live in `frontend/src/theme.ts` + `frontend/src/styles.css`.
+- Right-side status panels are now fully theme-aware (previously hardcoded light styles).
 
 ### Fixed
-- Nothing yet
+- Switching the TTS engine no longer resets the roleplay system prompt mid-conversation.
+- "Wipe everything" now also clears the server-side session library.
 
 ## [0.1.0] - 2026-01-01
 

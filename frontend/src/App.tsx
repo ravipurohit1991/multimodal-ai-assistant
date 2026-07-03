@@ -15,10 +15,12 @@ import { SceneBar } from "./components/SceneBar";
 import { CastBar } from "./components/CastBar";
 import { CharacterManager } from "./components/CharacterManager";
 import { LorebookModal } from "./components/LorebookModal";
-import { downloadJson, readJsonFile } from "./io";
-import { getTheme, Theme } from "./theme";
+import { SessionsModal } from "./components/SessionsModal";
+import { downloadJson, downloadText, readJsonFile } from "./io";
+import { getTheme, applyThemeToDocument } from "./theme";
 import { buildAmbient } from "./atmosphere";
 import { moodToColor } from "./mood";
+import { Soundscape } from "./soundscape";
 
 // Short, collision-unlikely id for roster characters.
 function makeId(): string {
@@ -91,10 +93,15 @@ export default function App() {
   const [transcript, setTranscript] = useState("");
   const [assistantText, setAssistantText] = useState("");
 
-  // Theme state — persisted
+  // Theme state — persisted. Dark ("ink & limelight") is the app's home look.
   const savedSettings = useMemo(() => loadSettings(), []);
-  const [themeName, setThemeName] = useState<'light' | 'dark'>(savedSettings.themeName || 'light');
+  const [themeName, setThemeName] = useState<'light' | 'dark'>(savedSettings.themeName || 'dark');
   const theme = useMemo(() => getTheme(themeName), [themeName]);
+
+  // Mirror the theme into CSS variables so the global stylesheet follows it.
+  useEffect(() => {
+    applyThemeToDocument(theme);
+  }, [theme]);
 
   // The active character as it was last saved. Used to seed the editable buffer
   // so a reload never loses per-character fields (system-prompt override, first
@@ -191,6 +198,34 @@ Boundaries:
   );
   // Auto-scene: let the character advance the setting via hidden [SCENE: ...] tags.
   const [autoScene, setAutoScene] = useState<boolean>(savedSettings.autoScene !== false);
+
+  // The living stage — weather/night particles over the reading area, and a
+  // synthesized ambience (rain, wind, thunder, crickets) that follows the scene.
+  const [fxEnabled, setFxEnabled] = useState<boolean>(savedSettings.sceneFx !== false);
+  const [soundOn, setSoundOn] = useState(false); // audio starts muted; enabling is a user gesture
+  const [soundVolume, setSoundVolume] = useState<number>(
+    typeof savedSettings.soundVolume === "number" ? savedSettings.soundVolume : 0.5
+  );
+  const soundscape = useMemo(() => new Soundscape(), []);
+  useEffect(() => {
+    soundscape.update({ time: scene.time, weather: scene.weather });
+  }, [soundscape, scene.time, scene.weather]);
+  useEffect(() => {
+    soundscape.setVolume(soundVolume);
+  }, [soundscape, soundVolume]);
+  useEffect(() => () => soundscape.dispose(), [soundscape]);
+  const toggleSound = (on: boolean) => {
+    setSoundOn(on);
+    soundscape.setEnabled(on);
+  };
+
+  // Auto-cast: in group scenes the model directs who answers. While a choice is
+  // in flight, the composer text waits in this ref until `speaker_chosen` lands.
+  const [autoCast, setAutoCast] = useState<boolean>(savedSettings.autoCast || false);
+  const pendingAutoSendRef = useRef<{ text: string; image: string | null; asNarrator: boolean } | null>(null);
+
+  // Server-side story library
+  const [showSessions, setShowSessions] = useState(false);
 
   // Immersion: live streaming bubble, rich formatting, per-message mood, suggestions
   const [streamingText, setStreamingText] = useState("");
@@ -331,6 +366,7 @@ Boundaries:
           setIsSendingMessage(false);
           setIsContinuing(false);
           swipeRegenRef.current = null;
+          pendingAutoSendRef.current = null;
           streamingActiveRef.current = false;
           setIsStreaming(false);
           setStreamingText("");
@@ -364,6 +400,11 @@ Boundaries:
           const finalText = currentAssistantTextRef.current;
           const swipeTarget = swipeRegenRef.current;
           const mood = pendingMoodRef.current;
+          // Generation stats reported by the backend for this reply.
+          const stats = {
+            ...(msg.elapsed_ms ? { genMs: msg.elapsed_ms } : {}),
+            ...(msg.approx_tokens ? { genTokens: msg.approx_tokens } : {}),
+          };
           // Which cast member authored this reply (group scenes) — captured at
           // generation start so it lands on the right message.
           const sp = pendingSpeakerRef.current;
@@ -385,6 +426,7 @@ Boundaries:
                   swipeIndex: newSwipes.length - 1,
                   ...(mood && { mood }),
                   ...attribution,
+                  ...stats,
                 };
                 return updated;
               });
@@ -403,6 +445,7 @@ Boundaries:
               timestamp: new Date(),
               ...(mood && { mood }),
               ...attribution,
+              ...stats,
             }]);
             // Construct the received response object
             setLastLlmResponse({
@@ -423,6 +466,10 @@ Boundaries:
         if (msg.type === "mood") {
           pendingMoodRef.current = msg.mood;
           setAssistantMood(msg.mood);
+        }
+        if (msg.type === "speaker_chosen") {
+          // Auto-cast: the model picked who answers; release the queued message.
+          autoCastDispatchRef.current(msg.name || "");
         }
         if (msg.type === "suggestions") {
           setSuggestions(msg.items || []);
@@ -507,6 +554,7 @@ Boundaries:
           currentAssistantTextRef.current = "";
           impersonationTextRef.current = "";
           swipeRegenRef.current = null;
+          pendingAutoSendRef.current = null;
           streamingActiveRef.current = false;
           setIsStreaming(false);
           setStreamingText("");
@@ -526,6 +574,7 @@ Boundaries:
       isImpersonatingRef.current = false;
       setIsImpersonating(false);
       swipeRegenRef.current = null;
+      pendingAutoSendRef.current = null;
       streamingActiveRef.current = false;
       setIsStreaming(false);
       setStreamingText("");
@@ -645,6 +694,45 @@ Boundaries:
     } else {
       pendingSpeakerRef.current = null;
     }
+  };
+
+  // Auto-cast dispatch: when the backend answers `choose_speaker`, hand the
+  // queued message to the chosen character. Kept in a ref refreshed every
+  // render so the ws handler (a stale closure) always sees current state.
+  const autoCastDispatchRef = useRef<(name: string) => void>(() => {});
+  useEffect(() => {
+    autoCastDispatchRef.current = (name: string) => {
+      const pending = pendingAutoSendRef.current;
+      pendingAutoSendRef.current = null;
+      if (!pending || !wsRef.current) return;
+      const char =
+        characters.find((c) => c.inScene && c.name.toLowerCase() === name.trim().toLowerCase()) ??
+        inSceneCharacters[0] ?? null;
+      if (char) {
+        selectCharacter(char.id); // the cast bar highlights who's answering
+        prepareTurnForSpeaker(char);
+      }
+      wsRef.current.send(JSON.stringify({
+        type: "text_message",
+        text: pending.text,
+        ...(pending.image ? {
+          image: pending.image,
+          image_explainer_model: imageExplainerProvider === "ollama" ? `ollama:${imageExplainerModel}` : undefined,
+        } : {}),
+        ...(pending.asNarrator ? { as_narrator: true } : {}),
+        ...(char && inSceneCharacters.length > 1 ? { speaker_name: char.name } : {}),
+      }));
+    };
+  });
+
+  // Queue a message and ask the model who should answer it (group auto-cast).
+  const sendViaAutoCast = (text: string, image: string | null, asNarrator: boolean) => {
+    pendingAutoSendRef.current = { text, image, asNarrator };
+    sendJson({
+      type: "choose_speaker",
+      candidates: inSceneCharacters.map((c) => c.name).filter(Boolean),
+      user_name: userName,
+    });
   };
 
   // Load a roster character into the editable buffer and make it the next speaker.
@@ -799,17 +887,23 @@ Boundaries:
       ...(attachedImage && { image: attachedImage })
     }]);
 
-    // In a group scene, point the backend at the chosen speaker before sending.
-    prepareTurnForSpeaker();
+    if (isGroupScene && autoCast) {
+      // Auto-cast: ask the model who answers; the message goes out when
+      // `speaker_chosen` comes back.
+      sendViaAutoCast(textInput, attachedImage, false);
+    } else {
+      // In a group scene, point the backend at the chosen speaker before sending.
+      prepareTurnForSpeaker();
 
-    // Send to backend for LLM processing with optional image
-    wsRef.current.send(JSON.stringify({
-      type: "text_message",
-      text: textInput,
-      image: attachedImage,  // Send base64 image if attached
-      image_explainer_model: imageExplainerProvider === "ollama" ? `ollama:${imageExplainerModel}` : undefined,
-      ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {})
-    }));
+      // Send to backend for LLM processing with optional image
+      wsRef.current.send(JSON.stringify({
+        type: "text_message",
+        text: textInput,
+        image: attachedImage,  // Send base64 image if attached
+        image_explainer_model: imageExplainerProvider === "ollama" ? `ollama:${imageExplainerModel}` : undefined,
+        ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {})
+      }));
+    }
 
     setTextInput("");
     setAttachedImage(null);  // Clear attached image after sending
@@ -833,13 +927,17 @@ Boundaries:
       narrator: true,
     }]);
 
-    prepareTurnForSpeaker();
-    wsRef.current.send(JSON.stringify({
-      type: "text_message",
-      text,
-      as_narrator: true,
-      ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {}),
-    }));
+    if (isGroupScene && autoCast) {
+      sendViaAutoCast(text, null, true);
+    } else {
+      prepareTurnForSpeaker();
+      wsRef.current.send(JSON.stringify({
+        type: "text_message",
+        text,
+        as_narrator: true,
+        ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {}),
+      }));
+    }
 
     setTextInput("");
   };
@@ -1070,25 +1168,52 @@ Boundaries:
     }
   };
 
-  // ----- Session save / load (full snapshot to/from a JSON file) -----
+  // ----- Session save / load (full snapshot, to file or the story library) -----
+  const buildSessionSnapshot = () => ({
+    type: "aiassistant_session",
+    version: 1,
+    savedAt: new Date().toISOString(),
+    conversationHistory,
+    settings: {
+      userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
+      authorNote, authorNoteDepth, includeMood, lorebook,
+      responseLength, narrationPerspective, pacing, scene, autoScene,
+      characters, selectedCharacterId,
+      llmHost, llmModel, currentVoice, ttsEngine, outputMode,
+      useContext, includeImageGen,
+      userCharacterImage, assistantCharacterImage,
+    },
+  });
+
   const handleSaveSession = () => {
-    const session = {
-      type: "aiassistant_session",
-      version: 1,
-      savedAt: new Date().toISOString(),
-      conversationHistory,
-      settings: {
-        userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
-        authorNote, authorNoteDepth, includeMood, lorebook,
-        responseLength, narrationPerspective, pacing, scene, autoScene,
-        characters, selectedCharacterId,
-        llmHost, llmModel, currentVoice, ttsEngine, outputMode,
-        useContext, includeImageGen,
-        userCharacterImage, assistantCharacterImage,
-      },
-    };
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    downloadJson(`session-${(assistantName || "chat").replace(/\s+/g, "_")}-${stamp}.json`, session);
+    downloadJson(`session-${(assistantName || "chat").replace(/\s+/g, "_")}-${stamp}.json`, buildSessionSnapshot());
+  };
+
+  // Export the conversation as a readable Markdown story.
+  const handleExportStory = () => {
+    if (conversationHistory.length === 0) {
+      alert("Nothing to export yet — the story hasn't started.");
+      return;
+    }
+    const title = assistantName ? `${assistantName} — a story with ${userName || "you"}` : "A story";
+    const lines: string[] = [`# ${title}`, ""];
+    const sceneBits = [scene.time, scene.weather, scene.location].filter(Boolean).join(", ");
+    if (scenario.trim()) lines.push(`> ${scenario.trim().replace(/\n+/g, " ")}`, "");
+    if (sceneBits) lines.push(`*Scene: ${sceneBits}*`, "");
+    lines.push(`*Exported ${new Date().toLocaleString()} · ${conversationHistory.length} messages*`, "", "---", "");
+    for (const m of conversationHistory) {
+      if (m.narrator) {
+        lines.push(`*${m.content.trim()}*`, "");
+        continue;
+      }
+      const who = m.role === "user" ? (userName || "You") : (m.speaker || assistantName || "Assistant");
+      lines.push(`**${who}:** ${m.content.trim()}`);
+      if (m.role === "assistant" && m.imagePrompt) lines.push("", `*(image: ${m.imagePrompt})*`);
+      lines.push("");
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadText(`story-${(assistantName || "chat").replace(/\s+/g, "_")}-${stamp}.md`, lines.join("\n"));
   };
 
   const applySession = (session: any) => {
@@ -1343,12 +1468,17 @@ Boundaries:
       setInputError(null);
       setIsContinuing(true);
       setIsSendingMessage(false);
-      prepareTurnForSpeaker();
-      wsRef.current.send(JSON.stringify({
-        type: "text_message",
-        text: "[Continue]",
-        ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {})
-      }));
+      if (isGroupScene && autoCast) {
+        // Let the model decide who carries the scene forward.
+        sendViaAutoCast("[Continue]", null, false);
+      } else {
+        prepareTurnForSpeaker();
+        wsRef.current.send(JSON.stringify({
+          type: "text_message",
+          text: "[Continue]",
+          ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {})
+        }));
+      }
     }
   };
 
@@ -1581,6 +1711,9 @@ Boundaries:
       pacing,
       scene,
       autoScene,
+      sceneFx: fxEnabled,
+      soundVolume,
+      autoCast,
       immersive,
       characters,
       selectedCharacterId,
@@ -1592,7 +1725,7 @@ Boundaries:
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, immersiveFormatting, lorebook, responseLength, narrationPerspective, pacing, scene, autoScene, immersive, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, immersiveFormatting, lorebook, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -1675,7 +1808,7 @@ Boundaries:
 
   return (
     <div style={{
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+      fontFamily: theme.fonts.ui,
       height: "100vh",
       display: "flex",
       overflow: "hidden",
@@ -1715,6 +1848,8 @@ Boundaries:
           onThemeChange={(newTheme) => setThemeName(newTheme)}
           onSaveSession={handleSaveSession}
           onLoadSession={handleLoadSession}
+          onOpenSessions={() => setShowSessions(true)}
+          onExportStory={handleExportStory}
           onWipeEverything={wipeEverything}
         />
       )}
@@ -1731,9 +1866,15 @@ Boundaries:
           connected={connected}
           scene={scene}
           autoScene={autoScene}
+          fxEnabled={fxEnabled}
+          soundOn={soundOn}
+          soundVolume={soundVolume}
           theme={theme}
           onSceneChange={updateScene}
           onToggleAutoScene={toggleAutoScene}
+          onToggleFx={(on) => setFxEnabled(on)}
+          onToggleSound={toggleSound}
+          onSoundVolume={setSoundVolume}
         />
 
         {/* Director controls — live steering of length, voice, pacing & scene beats.
@@ -1775,6 +1916,8 @@ Boundaries:
           formattingEnabled={immersiveFormatting}
           ambient={ambient}
           immersive={immersive}
+          scene={scene}
+          fxEnabled={fxEnabled}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -1816,8 +1959,10 @@ Boundaries:
           connected={connected}
           userName={userName}
           userAvatar={userCharacterImage}
+          autoCast={autoCast}
           theme={theme}
           onSelectSpeaker={selectCharacter}
+          onToggleAutoCast={(on) => setAutoCast(on)}
           onOpenManager={() => setShowCharacterManager(true)}
         />
 
@@ -1945,6 +2090,21 @@ Boundaries:
         lastLlmResponse={lastLlmResponse}
         theme={theme}
         onClose={() => setShowJsonPayload(false)}
+      />
+
+      {/* Story library — server-side saved sessions */}
+      <SessionsModal
+        show={showSessions}
+        theme={theme}
+        onClose={() => setShowSessions(false)}
+        buildSession={buildSessionSnapshot}
+        onLoadSession={(session) => {
+          if (conversationHistory.length > 0 &&
+              !window.confirm("Opening this story will replace your current chat and settings. Continue?")) {
+            return;
+          }
+          applySession(session);
+        }}
       />
     </div>
   );

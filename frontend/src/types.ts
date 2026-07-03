@@ -7,7 +7,8 @@ export type ServerMsg =
   | { type: "transcript"; text: string }
   | { type: "assistant_start" }
   | { type: "assistant_delta"; delta: string }
-  | { type: "assistant_end" }
+  | { type: "assistant_end"; elapsed_ms?: number; approx_tokens?: number }
+  | { type: "speaker_chosen"; name: string }
   | { type: "assistant_cancelled" }
   | { type: "audio_start"; sample_rate: number; format: "pcm16le" }
   | { type: "audio_end" }
@@ -38,6 +39,18 @@ export interface Message {
   mood?: string;            // Character mood captured when this reply arrived
   speaker?: string;         // Which cast character authored this reply (group scenes)
   narrator?: boolean;       // Rendered as omniscient scene narration, not dialogue
+  genMs?: number;           // Generation wall time reported by the backend
+  genTokens?: number;       // Approximate token count of this generation
+}
+
+/** A saved conversation in the server-side session library. */
+export interface SessionSummary {
+  id: string;
+  name: string;
+  saved_at: string;
+  message_count: number;
+  character: string;
+  preview: string;
 }
 
 /**
