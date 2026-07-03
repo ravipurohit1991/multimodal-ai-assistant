@@ -75,6 +75,9 @@ def wipe_user_data(clear_logs: bool = True) -> dict:
     summary: dict = {
         "images_removed": _clear_directory_contents(config.user_images_dir),
         "characters_removed": _clear_directory_contents(config.user_characters_dir),
+        "sessions_removed": _clear_directory_contents(
+            os.path.join(config.user_data_dir, "sessions")
+        ),
     }
 
     if clear_logs:

@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import re
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -16,7 +17,7 @@ from aiassistant.config import config
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
 from aiassistant.roleplay import apply_placeholders, build_llm_messages, parse_scene_tag
-from aiassistant.state import ConnState, cancel_llm, get_system_prompt_for_tts_engine
+from aiassistant.state import ConnState, cancel_llm
 from aiassistant.utils import (
     image_to_base64,
     logger,
@@ -261,11 +262,17 @@ async def ws_endpoint(ws: WebSocket):
         # Initialize text filter for TTS
         text_filter = StreamingTextFilter()
 
+        # Generation stats for the UI: wall time + a chunk-based token estimate
+        # (Ollama streams roughly one token per delta).
+        gen_started = time.perf_counter()
+        delta_count = 0
+
         try:
             logger.info("Starting LLM streaming...")
             temp_client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
             async for delta in temp_client.stream_chat(llm_messages, model=state.llm_model):
                 full += delta
+                delta_count += 1
 
                 # Filter text for TTS - only keep spoken parts (no actions/formatting)
                 filtered_delta = text_filter.process(delta)
@@ -483,8 +490,17 @@ async def ws_endpoint(ws: WebSocket):
             # (The visible/streamed text stays clean; the UI adds the name badge.)
             content_to_store = f"{speaker_name}: {stored_full}" if speaker_name else stored_full
             state.messages.append({"role": "assistant", "content": content_to_store})
-            await send_json({"type": "assistant_end"})
-            logger.info("Assistant response complete")
+            elapsed_ms = int((time.perf_counter() - gen_started) * 1000)
+            await send_json(
+                {
+                    "type": "assistant_end",
+                    "elapsed_ms": elapsed_ms,
+                    "approx_tokens": delta_count,
+                }
+            )
+            logger.info(
+                f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)"
+            )
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -611,12 +627,10 @@ Use one or two words only. This tag is stripped before the user sees it and is u
             success, message = engine_manager.switch_tts_engine(engine)
 
             if success:
+                # Note: deliberately leave the system prompt untouched — switching
+                # the voice engine must never reset the roleplay context.
                 state.tts_engine_type = engine
-                state.messages[0] = {
-                    "role": "system",
-                    "content": get_system_prompt_for_tts_engine(engine),
-                }
-                logger.info(f"✅ {message} - System prompt updated")
+                logger.info(f"✅ {message}")
                 await send_json(
                     {"type": "tts_engine_changed", "tts_engine": engine, "message": message}
                 )
@@ -946,6 +960,82 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                     state.llm_task = asyncio.create_task(
                         impersonate_user_task(user_name, user_hint)
                     )
+
+                elif mtype == "choose_speaker":
+                    # Auto-cast: in a group scene, let the model direct who
+                    # naturally speaks next. Purely advisory — the frontend then
+                    # requests the actual reply for the chosen character.
+                    candidates = [
+                        str(c).strip()
+                        for c in (data.get("candidates") or [])
+                        if str(c).strip()
+                    ]
+                    if not candidates:
+                        await send_json({"type": "speaker_chosen", "name": ""})
+                        continue
+
+                    async def choose_speaker_task(candidates: list[str] = candidates):
+                        try:
+                            convo = [
+                                m for m in state.messages if m.get("role") != "system"
+                            ][-8:]
+                            transcript = "\n".join(
+                                f"{m.get('role', 'user')}: {str(m.get('content', ''))[:300]}"
+                                for m in convo
+                            )
+                            roster = ", ".join(candidates)
+                            prompt_messages = [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are the scene director of a group roleplay. "
+                                        "Given the recent conversation and the characters "
+                                        "present, decide which character would most "
+                                        "naturally speak next. Reply with exactly one "
+                                        "name from the list, nothing else."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"Characters present: {roster}\n\n"
+                                        f"Recent conversation:\n{transcript}\n\n"
+                                        f"Who speaks next? Answer with one name from: {roster}"
+                                    ),
+                                },
+                            ]
+                            raw = ""
+                            temp_client = OllamaClient(
+                                host=state.llm_host, default_model=state.llm_model
+                            )
+                            async for delta in temp_client.stream_chat(
+                                prompt_messages, model=state.llm_model
+                            ):
+                                raw += delta
+                                if len(raw) > 200:
+                                    break
+                            # Match a candidate name anywhere in the output; first
+                            # (earliest) mention wins. Fall back to round-robin-ish
+                            # first candidate so the scene never stalls.
+                            lowered = raw.lower()
+                            best = ""
+                            best_pos = len(lowered) + 1
+                            for name in candidates:
+                                pos = lowered.find(name.lower())
+                                if pos != -1 and pos < best_pos:
+                                    best, best_pos = name, pos
+                            chosen = best or candidates[0]
+                            logger.info(f"Auto-cast chose next speaker: {chosen}")
+                            await send_json({"type": "speaker_chosen", "name": chosen})
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            logger.error(f"choose_speaker error: {e}")
+                            await send_json(
+                                {"type": "speaker_chosen", "name": candidates[0]}
+                            )
+
+                    state.llm_task = asyncio.create_task(choose_speaker_task(candidates))
 
                 elif mtype == "suggest_replies":
                     user_name = data.get("user_name", "User")
