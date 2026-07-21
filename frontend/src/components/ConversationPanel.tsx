@@ -1,13 +1,15 @@
 import { useRef, useEffect } from "react";
-import { Message, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
+import { Character, Message, RiggedCharacter, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
 import { MessageItem } from "./MessageItem";
 import { StreamingBubble } from "./StreamingBubble";
+import { RigStage } from "./RigStage";
 import { SceneFX } from "../scenefx";
 import { moodToEmoji, moodToColor } from "../mood";
 import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
   IconStop, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
+  IconSparkles,
 } from "./Icons";
 
 interface ConversationPanelProps {
@@ -27,6 +29,11 @@ interface ConversationPanelProps {
   showRealtimePanel: boolean;
   userCharacterImage: string | null;
   assistantCharacterImage: string | null;
+  inSceneCharacters: Character[];
+  selectedCharacterId: string;
+  rigAssets: RiggedCharacter[];
+  stageEnabled: boolean;
+  stageDirective: StageAnimationDirective | null;
   assistantMood: string;
   streamingText: string;
   isStreaming: boolean;
@@ -45,6 +52,7 @@ interface ConversationPanelProps {
   onVoiceChange: (voice: string) => void;
   onToggleContext: (enabled: boolean) => void;
   onToggleImageGen: (enabled: boolean) => void;
+  onToggleStage: (enabled: boolean) => void;
   onClearChat: () => void;
   onStopAudio: () => void;
   onShowSettings: () => void;
@@ -80,6 +88,11 @@ export function ConversationPanel({
   showRealtimePanel,
   userCharacterImage,
   assistantCharacterImage,
+  inSceneCharacters,
+  selectedCharacterId,
+  rigAssets,
+  stageEnabled,
+  stageDirective,
   assistantMood,
   streamingText,
   isStreaming,
@@ -95,6 +108,7 @@ export function ConversationPanel({
   onVoiceChange,
   onToggleContext,
   onToggleImageGen,
+  onToggleStage,
   onClearChat,
   onStopAudio,
   onShowSettings,
@@ -235,6 +249,14 @@ export function ConversationPanel({
         </button>
         <button
           className="icon-btn"
+          data-active={stageEnabled}
+          onClick={() => onToggleStage(!stageEnabled)}
+          title={stageEnabled ? "Animated stage on — the model may send hidden rig motion cues" : "Animated stage off — hide the rig and stop motion cues"}
+        >
+          <IconSparkles size={16} />
+        </button>
+        <button
+          className="icon-btn"
           data-active={formattingEnabled}
           onClick={() => onToggleFormatting(!formattingEnabled)}
           title={formattingEnabled ? "Rich prose formatting on (*actions*, \"dialogue\")" : "Rich prose formatting off"}
@@ -280,8 +302,8 @@ export function ConversationPanel({
       {/* The stage — scene light, weather, and the story itself */}
       <div style={{
         flex: 1,
-        overflowY: "auto",
-        padding: immersive ? "30px 24px" : "18px 22px",
+        minHeight: 0,
+        overflow: "hidden",
         background: ambient || theme.colors.background,
         transition: "background 1.2s ease",
         position: "relative",
@@ -292,6 +314,26 @@ export function ConversationPanel({
           themeName={theme.name}
           enabled={fxEnabled}
         />
+        {stageEnabled && (
+          <RigStage
+            characters={inSceneCharacters}
+            selectedId={selectedCharacterId}
+            rigAssets={rigAssets}
+            conversationHistory={conversationHistory}
+            assistantMood={assistantMood}
+            stageDirective={stageDirective}
+            isStreaming={isStreaming}
+            immersive={immersive}
+            theme={theme}
+          />
+        )}
+        <div style={{
+          position: "relative",
+          zIndex: 1,
+          height: "100%",
+          overflowY: "auto",
+          padding: immersive ? "30px 24px" : "18px 22px",
+        }}>
         <div style={{
           maxWidth: immersive ? 860 : "none",
           margin: immersive ? "0 auto" : undefined,
@@ -370,6 +412,7 @@ export function ConversationPanel({
             <div ref={messagesEndRef} />
           </>
         )}
+        </div>
         </div>
       </div>
     </>

@@ -1,7 +1,8 @@
 import React, { useRef, useState } from "react";
-import { Character } from "../types";
+import { Character, RiggedCharacter } from "../types";
 import { Theme } from "../theme";
-import { IconX, IconUsers, IconPlus, IconUpload, IconCopy, IconMessage, IconTrash } from "./Icons";
+import { rigSummary } from "../rigs";
+import { IconX, IconUsers, IconPlus, IconUpload, IconCopy, IconMessage, IconTrash, IconDice, IconSparkles } from "./Icons";
 
 interface CharacterManagerProps {
   show: boolean;
@@ -16,6 +17,8 @@ interface CharacterManagerProps {
   systemPrompt: string;
   firstMessage: string;
   avatar: string | null;
+  rigAssets: RiggedCharacter[];
+  rigId: string | null;
   // The user ("you") — part of the cast, but never voiced by the AI.
   userName: string;
   userPersona: string;
@@ -34,6 +37,10 @@ interface CharacterManagerProps {
   onSystemPromptChange: (v: string) => void;
   onFirstMessageChange: (v: string) => void;
   onAvatarChange: (dataUrl: string | null) => void;
+  onRigChange: (rigId: string | null) => void;
+  onGenerateRig: () => void;
+  onCreateRigFromAvatar: () => void;
+  onRigImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onUserNameChange: (v: string) => void;
   onUserPersonaChange: (v: string) => void;
   onUserAvatarChange: (dataUrl: string | null) => void;
@@ -91,6 +98,8 @@ export function CharacterManager({
   systemPrompt,
   firstMessage,
   avatar,
+  rigAssets,
+  rigId,
   userName,
   userPersona,
   userAvatar,
@@ -108,6 +117,10 @@ export function CharacterManager({
   onSystemPromptChange,
   onFirstMessageChange,
   onAvatarChange,
+  onRigChange,
+  onGenerateRig,
+  onCreateRigFromAvatar,
+  onRigImageUpload,
   onUserNameChange,
   onUserPersonaChange,
   onUserAvatarChange,
@@ -115,11 +128,13 @@ export function CharacterManager({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const userAvatarInputRef = useRef<HTMLInputElement>(null);
   const cardInputRef = useRef<HTMLInputElement>(null);
+  const rigImageInputRef = useRef<HTMLInputElement>(null);
   // Whether the right pane is editing "you" (the user) rather than a cast character.
   const [editingUser, setEditingUser] = useState(false);
   if (!show) return null;
 
   const inSceneCount = characters.filter((c) => c.inScene).length;
+  const selectedRig = rigId ? rigAssets.find((r) => r.id === rigId) : null;
 
   const labelStyle: React.CSSProperties = {
     display: "block",
@@ -353,6 +368,53 @@ export function CharacterManager({
             </div>
 
             <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>2D rig</label>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8, alignItems: "center" }}>
+                <select
+                  className="input"
+                  value={rigId ?? ""}
+                  onChange={(e) => onRigChange(e.target.value || null)}
+                  style={{ width: "100%" }}
+                >
+                  <option value="">Auto body</option>
+                  {rigAssets.map((rig) => (
+                    <option key={rig.id} value={rig.id}>
+                      {rig.name}
+                    </option>
+                  ))}
+                </select>
+                {rigId && (
+                  <button className="btn btn-quiet" onClick={() => onRigChange(null)} style={{ padding: "7px 10px", fontSize: 12 }}>
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input ref={rigImageInputRef} type="file" accept="image/*" onChange={onRigImageUpload} style={{ display: "none" }} />
+              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <button className="btn btn-quiet" onClick={onGenerateRig} style={{ padding: "5px 10px", fontSize: 12 }}>
+                  <IconDice size={13} /> Generate
+                </button>
+                <button className="btn btn-quiet" onClick={() => rigImageInputRef.current?.click()} style={{ padding: "5px 10px", fontSize: 12 }}>
+                  <IconUpload size={13} /> Upload picture
+                </button>
+                <button
+                  className="btn btn-quiet"
+                  onClick={onCreateRigFromAvatar}
+                  disabled={!avatar}
+                  title={avatar ? "Create a rig using this avatar image" : "Upload an avatar first"}
+                  style={{ padding: "5px 10px", fontSize: 12 }}
+                >
+                  <IconSparkles size={13} /> From avatar
+                </button>
+                {selectedRig && (
+                  <span className="meta-mono" style={{ marginLeft: "auto" }}>
+                    {rigSummary(selectedRig)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Description / definition</label>
               <textarea className="input" value={description} onChange={(e) => onDescriptionChange(e.target.value)} rows={4} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Who is this character — appearance, background, traits, how they speak…" />
             </div>
@@ -364,9 +426,9 @@ export function CharacterManager({
 
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>
-                System instruction <span style={hint}>(per-character, optional — overrides the global one)</span>
+                Character instruction <span style={hint}>(optional — overrides the global creative prompt)</span>
               </label>
-              <textarea className="input" value={systemPrompt} onChange={(e) => onSystemPromptChange(e.target.value)} rows={3} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Leave blank to use the global system prompt. Set this to give this character their own base instructions." />
+              <textarea className="input" value={systemPrompt} onChange={(e) => onSystemPromptChange(e.target.value)} rows={3} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Leave blank to use the global character prompt. Set this to give the character custom creative instructions." />
             </div>
 
             <div>

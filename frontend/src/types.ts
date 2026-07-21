@@ -1,9 +1,10 @@
 export type ServerMsg =
   | { type: "config"; tts_engine?: string; llm_model?: string; output_mode?: string }
-  | { type: "ack"; use_context?: boolean; include_imagegen?: boolean; include_mood?: boolean; system_prompt_updated?: boolean; voice?: string; llm_model?: string; lorebook_entries?: number; author_note_set?: boolean; response_length?: ResponseLength; narration_perspective?: NarrationPerspective; pacing?: Pacing; director_beat?: string }
+  | { type: "ack"; use_context?: boolean; include_imagegen?: boolean; include_mood?: boolean; include_animation?: boolean; system_prompt_updated?: boolean; voice?: string; llm_model?: string; lorebook_entries?: number; author_note_set?: boolean; response_length?: ResponseLength; narration_perspective?: NarrationPerspective; pacing?: Pacing; director_beat?: string }
   | { type: "director_beat_consumed" }
   | { type: "ack_recording"; recording: boolean }
   | { type: "mood"; mood: string }
+  | { type: "animation_directive"; directive: StageAnimationDirective }
   | { type: "transcript"; text: string }
   | { type: "assistant_start" }
   | { type: "assistant_delta"; delta: string }
@@ -37,10 +38,95 @@ export interface Message {
   swipes?: string[];        // Alternative generated variants of this message
   swipeIndex?: number;      // Currently displayed variant index
   mood?: string;            // Character mood captured when this reply arrived
+  animation?: StageAnimationDirective; // High-level acting direction for the rig stage
   speaker?: string;         // Which cast character authored this reply (group scenes)
   narrator?: boolean;       // Rendered as omniscient scene narration, not dialogue
   genMs?: number;           // Generation wall time reported by the backend
   genTokens?: number;       // Approximate token count of this generation
+}
+
+export type RigAssetSource = "generated" | "uploaded" | "fallback";
+export type RigLayerKind = "capsule" | "ellipse" | "rect" | "image";
+export type RigExpressionRole =
+  | "head"
+  | "hair"
+  | "eye-left"
+  | "eye-right"
+  | "brow-left"
+  | "brow-right"
+  | "mouth";
+
+export interface RigBone {
+  id: string;
+  parent: string | null;
+  x: number;
+  y: number;
+  rotation: number;
+  length: number;
+}
+
+export interface RigLayer {
+  id: string;
+  boneId: string;
+  kind: RigLayerKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  rx?: number;
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  opacity?: number;
+  image?: string | null;
+  zIndex: number;
+  role?: RigExpressionRole;
+}
+
+export interface RiggedCharacter {
+  id: string;
+  name: string;
+  source: RigAssetSource;
+  createdAt: string;
+  anatomy: "humanoid-2d";
+  bounds: { width: number; height: number };
+  bones: RigBone[];
+  layers: RigLayer[];
+  palette: {
+    skin: string;
+    hair: string;
+    outfit: string;
+    outfitAlt: string;
+    accent: string;
+  };
+  sourceImage?: string | null;
+}
+
+export interface StageAnimationDirective {
+  raw?: string;
+  speaker?: string;
+  emotion?: string;
+  gesture?: string;
+  posture?: string;
+  gaze?: string;
+  target?: string;
+  intensity?: number;
+  duration?: number;
+  startedAt?: number;
+  pose?: Record<string, StageBoneOffset>;
+  motion?: Record<string, StageMotionOffset>;
+}
+
+export interface StageBoneOffset {
+  x?: number;
+  y?: number;
+  rotation?: number;
+}
+
+export interface StageMotionOffset extends StageBoneOffset {
+  speed?: number;
+  phase?: number;
 }
 
 /** A saved conversation in the server-side session library. */
@@ -66,6 +152,7 @@ export interface Character {
   systemPrompt: string;  // per-character base instruction ("" = use global default)
   firstMessage: string;
   avatar: string | null; // data URL, purely for display
+  rigId?: string | null; // reusable 2D rig asset for the animated stage
   inScene: boolean;      // part of the active cast for the current scene
 }
 

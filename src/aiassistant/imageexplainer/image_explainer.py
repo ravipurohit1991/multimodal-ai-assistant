@@ -13,6 +13,7 @@ import torch
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
 from aiassistant.imageexplainer.base import ImageExplainerEngine
+from aiassistant.prompts import DEFAULT_IMAGE_DESCRIPTION_PROMPT
 from aiassistant.utils import logger, resolve_local_model_path
 
 
@@ -156,8 +157,9 @@ class ImageExplainer(ImageExplainerEngine):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        default_system_prompt = "You are an image description engine. Describe the image factually and objectively, without adding any interpretation, emotion, or conversational elements. Do not address the user or refer to yourself."
-        system_prompt = system_prompt if system_prompt is not None else default_system_prompt
+        system_prompt = (
+            system_prompt if system_prompt is not None else DEFAULT_IMAGE_DESCRIPTION_PROMPT
+        )
 
         # Check for Ollama model override
         if model_id and model_id.startswith("ollama:"):

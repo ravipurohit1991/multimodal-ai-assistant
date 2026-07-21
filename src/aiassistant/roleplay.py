@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+from aiassistant.prompts import build_final_reply_reminder
+
 # {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
 # tolerant of inner whitespace, e.g. "{{ Char }}".
 _CHAR_MACRO_RE = re.compile(r"\{\{\s*char\s*\}\}", re.IGNORECASE)
@@ -27,9 +29,9 @@ def apply_placeholders(text: str, char: str = "", user: str = "") -> str:
     if not text:
         return text
     if char:
-        text = _CHAR_MACRO_RE.sub(char, text)
+        text = _CHAR_MACRO_RE.sub(lambda _match: char, text)
     if user:
-        text = _USER_MACRO_RE.sub(user, text)
+        text = _USER_MACRO_RE.sub(lambda _match: user, text)
     return text
 
 
@@ -113,21 +115,54 @@ _WEATHER_PHRASES = {
 # Canonical scene vocabulary plus common synonyms, so the model can be loose
 # ("evening", "raining") and still land on a value the UI understands.
 _TIME_ALIASES = {
-    "dawn": "dawn", "sunrise": "dawn", "daybreak": "dawn",
-    "morning": "morning", "am": "morning",
-    "midday": "midday", "noon": "midday", "midafternoon": "afternoon",
+    "dawn": "dawn",
+    "sunrise": "dawn",
+    "daybreak": "dawn",
+    "morning": "morning",
+    "am": "morning",
+    "midday": "midday",
+    "noon": "midday",
+    "midafternoon": "afternoon",
     "afternoon": "afternoon",
-    "dusk": "dusk", "sunset": "dusk", "evening": "dusk", "twilight": "dusk", "nightfall": "dusk",
-    "night": "night", "midnight": "night", "nighttime": "night", "nocturnal": "night",
+    "dusk": "dusk",
+    "sunset": "dusk",
+    "evening": "dusk",
+    "twilight": "dusk",
+    "nightfall": "dusk",
+    "night": "night",
+    "midnight": "night",
+    "nighttime": "night",
+    "nocturnal": "night",
 }
 _WEATHER_ALIASES = {
-    "clear": "clear", "sunny": "clear", "fair": "clear",
-    "cloudy": "cloudy", "overcast": "cloudy", "cloud": "cloudy", "clouds": "cloudy",
-    "rain": "rain", "rainy": "rain", "raining": "rain", "drizzle": "rain", "drizzly": "rain",
-    "storm": "storm", "stormy": "storm", "thunderstorm": "storm", "thunder": "storm",
-    "snow": "snow", "snowy": "snow", "snowing": "snow", "blizzard": "snow",
-    "fog": "fog", "foggy": "fog", "mist": "fog", "misty": "fog",
-    "wind": "wind", "windy": "wind", "gale": "wind", "breezy": "wind",
+    "clear": "clear",
+    "sunny": "clear",
+    "fair": "clear",
+    "cloudy": "cloudy",
+    "overcast": "cloudy",
+    "cloud": "cloudy",
+    "clouds": "cloudy",
+    "rain": "rain",
+    "rainy": "rain",
+    "raining": "rain",
+    "drizzle": "rain",
+    "drizzly": "rain",
+    "storm": "storm",
+    "stormy": "storm",
+    "thunderstorm": "storm",
+    "thunder": "storm",
+    "snow": "snow",
+    "snowy": "snow",
+    "snowing": "snow",
+    "blizzard": "snow",
+    "fog": "fog",
+    "foggy": "fog",
+    "mist": "fog",
+    "misty": "fog",
+    "wind": "wind",
+    "windy": "wind",
+    "gale": "wind",
+    "breezy": "wind",
 }
 
 
@@ -272,8 +307,7 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
         return ""
     return (
         "[Relevant world & character knowledge — treat the following as "
-        "established facts. Do not mention or quote this list directly.]\n"
-        + "\n".join(parts)
+        "established facts. Do not mention or quote this list directly.]\n" + "\n".join(parts)
     )
 
 
@@ -281,9 +315,9 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
     """Assemble the message list sent to the LLM for a normal turn.
 
     Order: system prompt(s) → Lorebook knowledge → history (with the Author's
-    Note inserted a few turns from the end) → Director/scene-style directive
-    (always last, for maximum recency). The returned list is always a fresh
-    copy, so ``state.messages`` stays clean.
+    Note inserted a few turns from the end) → Director/scene-style directive →
+    final response-contract reminder. The returned list is always a fresh copy,
+    so ``state.messages`` stays clean.
     """
     char = getattr(state, "char_name", "") or ""
     user = getattr(state, "user_name", "") or ""
@@ -328,11 +362,22 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
 
     messages = system_msgs + lore_msgs + scene_msgs + history
 
-    # Director/scene-style directive: appended last so the most recent instruction
-    # the model sees is the user's live control over length, perspective, pacing,
-    # and any one-shot beat.
+    # Director/scene-style directive is kept near the end for strong recency.
     style_block = build_style_directive(state, char, user)
     if style_block:
         messages.append({"role": "system", "content": style_block})
+
+    # Reassert the small invariant contract after dynamic lore, author notes, and
+    # director cues. This helps local models follow the rules even with long cards.
+    messages.append(
+        {
+            "role": "system",
+            "content": build_final_reply_reminder(
+                mood=bool(getattr(state, "include_mood", False)),
+                auto_scene=bool(getattr(state, "auto_scene", False)),
+                animation=bool(getattr(state, "include_animation", False)),
+            ),
+        }
+    )
 
     return messages

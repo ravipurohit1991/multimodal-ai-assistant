@@ -14,3 +14,4 @@ export { SceneBar } from "./SceneBar";
 export { CastBar } from "./CastBar";
 export { CharacterManager } from "./CharacterManager";
 export { SessionsModal } from "./SessionsModal";
+export { RigStage } from "./RigStage";

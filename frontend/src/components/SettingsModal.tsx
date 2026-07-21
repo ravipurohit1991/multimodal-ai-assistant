@@ -86,9 +86,9 @@ export function SettingsModal({
 
         <div style={{ padding: 20, overflowY: "auto" }}>
           <div>
-            <Label>Global system prompt</Label>
+            <Label>Global character prompt</Label>
             <div style={{ ...helpTextStyle, marginBottom: 6 }}>
-              The base roleplay instructions used for every character, unless a character sets its own override.
+              Creative roleplay instructions used for every character unless one has an override. The app's reply and safety contract is applied separately.
             </div>
             <textarea
               className="input"
@@ -96,7 +96,7 @@ export function SettingsModal({
               onChange={(e) => onSystemPromptChange(e.target.value)}
               rows={7}
               style={{ width: "100%", fontSize: 13, lineHeight: 1.5, resize: "vertical" }}
-              placeholder="Base instructions for the AI…"
+              placeholder="Creative instructions for the character…"
             />
           </div>
 
