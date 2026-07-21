@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -21,6 +21,8 @@ import { getTheme, applyThemeToDocument } from "./theme";
 import { buildAmbient } from "./atmosphere";
 import { moodToColor } from "./mood";
 import { Soundscape } from "./soundscape";
+import { createGeneratedRig, createUploadedRig } from "./rigs";
+import { upgradeRoleplayPrompt } from "./prompts";
 
 // Short, collision-unlikely id for roster characters.
 function makeId(): string {
@@ -87,6 +89,17 @@ function saveSettings(settings: Record<string, any>) {
   }
 }
 
+function animationWithLocalStart(directive: StageAnimationDirective): StageAnimationDirective {
+  return { ...directive, startedAt: performance.now() / 1000 };
+}
+
+function animationForHistory(directive: StageAnimationDirective | null): StageAnimationDirective | null {
+  if (!directive) return null;
+  const persistable = { ...directive };
+  delete persistable.startedAt;
+  return persistable;
+}
+
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -148,23 +161,7 @@ export default function App() {
   // the prompt's "### User" section. Managed alongside the cast (you are part of it).
   const [userPersona, setUserPersona] = useState(savedSettings.userPersona || "");
   const [assistantName, setAssistantName] = useState(savedActiveCharacter?.name ?? (savedSettings.assistantName || "Assistant"));
-  const [systemPrompt, setSystemPrompt] = useState(savedSettings.systemPrompt || `
-You are {{char}}, the character in an immersive, collaborative roleplay with {{user}}. Stay fully in character as {{char}} at all times and treat this as a living, evolving story you are co-writing.
-
-Bringing {{char}} to life:
-- Show, don't tell. Convey {{char}}'s emotions through actions, body language, expression, and tone rather than naming the feeling outright. Ground every reply in the present scene with concrete sensory detail.
-- Keep {{char}}'s personality, voice, and motivations consistent. Let {{char}} have independent desires and react authentically — including hesitation, disagreement, refusal, or surprise when they fit.
-- Drive the scene forward. Take initiative, raise questions, introduce small developments. Never stall, and never simply echo what {{user}} just said.
-- Keep prose fresh: vary sentence structure and avoid reusing phrasing from earlier replies. Favor vivid specifics over over-written description.
-
-Formatting:
-- Wrap actions and narration in *asterisks*. Put spoken words in "double quotes". Render {{char}}'s private thoughts in *italics* from a first-person view — other characters cannot hear thoughts.
-
-Boundaries:
-- Only ever write for {{char}} and the surrounding world. Never speak, act, decide, or narrate the thoughts of {{user}}.
-- Keep the story immersive and tasteful; let emotional depth and tension carry the scene, and fade to scene transitions rather than depicting explicit content.
-- If {{user}} sends an out-of-character note (in parentheses or prefixed with "OOC:"), treat it as direction and continue without breaking immersion.
-`.trim());
+  const [systemPrompt, setSystemPrompt] = useState(upgradeRoleplayPrompt(savedSettings.systemPrompt));
   const [characterDef, setCharacterDef] = useState(savedActiveCharacter?.description ?? (savedSettings.characterDef || ""));
   const [scenario, setScenario] = useState(savedSettings.scenario || "");
   const [personality, setPersonality] = useState(savedActiveCharacter?.personality ?? (savedSettings.personality || ""));
@@ -179,6 +176,8 @@ Boundaries:
   );
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
   const [assistantMood, setAssistantMood] = useState("");
+  const [stageEnabled, setStageEnabled] = useState<boolean>(savedSettings.stageEnabled !== false);
+  const [stageDirective, setStageDirective] = useState<StageAnimationDirective | null>(null);
   const swipeRegenRef = useRef<number | null>(null);
 
   // Director controls — persistent style dials + a one-shot scene cue.
@@ -232,6 +231,7 @@ Boundaries:
   const [isStreaming, setIsStreaming] = useState(false);
   const streamingActiveRef = useRef(false);
   const pendingMoodRef = useRef("");
+  const pendingAnimationRef = useRef<StageAnimationDirective | null>(null);
   const [immersiveFormatting, setImmersiveFormatting] = useState<boolean>(
     savedSettings.immersiveFormatting !== false
   );
@@ -260,6 +260,13 @@ Boundaries:
   // characterDef, personality, assistantCharacterImage) plus the two below, and
   // a sync effect keeps its roster entry current.
   const [characterSystemPrompt, setCharacterSystemPrompt] = useState<string>(savedActiveCharacter?.systemPrompt ?? "");
+  const [characterRigId, setCharacterRigId] = useState<string | null>(savedActiveCharacter?.rigId ?? null);
+  const initialRigAssets = useMemo<RiggedCharacter[]>(() => {
+    const saved = savedSettings.rigAssets;
+    return Array.isArray(saved) ? saved as RiggedCharacter[] : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [rigAssets, setRigAssets] = useState<RiggedCharacter[]>(initialRigAssets);
   const initialRoster = useMemo<Character[]>(() => {
     const saved = savedSettings.characters;
     if (Array.isArray(saved) && saved.length > 0) return saved as Character[];
@@ -272,6 +279,7 @@ Boundaries:
       systemPrompt: "",
       firstMessage: "",
       avatar: savedSettings.assistantCharacterImage || null,
+      rigId: null,
       inScene: true,
     }];
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,7 +311,9 @@ Boundaries:
 
   // Voice & Model settings — persisted
   const [llmHost, setLlmHost] = useState(savedSettings.llmHost || "http://localhost:11434");
-  const [llmModel, setLlmModel] = useState(savedSettings.llmModel || "deepseek-v4-flash:cloud");
+  // No baked-in default: the model list comes from the configured Ollama host and
+  // the user picks one, so an unknown model is never pinned behind their back.
+  const [llmModel, setLlmModel] = useState<string>(savedSettings.llmModel || "");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [availableVoices, setAvailableVoices] = useState<VoiceInfo[]>([]);
   const [currentVoice, setCurrentVoice] = useState(savedSettings.currentVoice || "en_GB-jenny_dioco-medium");
@@ -367,6 +377,8 @@ Boundaries:
           setIsContinuing(false);
           swipeRegenRef.current = null;
           pendingAutoSendRef.current = null;
+          pendingAnimationRef.current = null;
+          setStageDirective(null);
           streamingActiveRef.current = false;
           setIsStreaming(false);
           setStreamingText("");
@@ -400,6 +412,7 @@ Boundaries:
           const finalText = currentAssistantTextRef.current;
           const swipeTarget = swipeRegenRef.current;
           const mood = pendingMoodRef.current;
+          const animation = animationForHistory(pendingAnimationRef.current);
           // Generation stats reported by the backend for this reply.
           const stats = {
             ...(msg.elapsed_ms ? { genMs: msg.elapsed_ms } : {}),
@@ -425,6 +438,7 @@ Boundaries:
                   swipes: newSwipes,
                   swipeIndex: newSwipes.length - 1,
                   ...(mood && { mood }),
+                  ...(animation && { animation }),
                   ...attribution,
                   ...stats,
                 };
@@ -444,6 +458,7 @@ Boundaries:
               content: finalText,
               timestamp: new Date(),
               ...(mood && { mood }),
+              ...(animation && { animation }),
               ...attribution,
               ...stats,
             }]);
@@ -456,6 +471,7 @@ Boundaries:
             });
           }
           pendingMoodRef.current = "";
+          pendingAnimationRef.current = null;
           currentAssistantTextRef.current = "";
           streamingActiveRef.current = false;
           setIsStreaming(false);
@@ -466,6 +482,11 @@ Boundaries:
         if (msg.type === "mood") {
           pendingMoodRef.current = msg.mood;
           setAssistantMood(msg.mood);
+        }
+        if (msg.type === "animation_directive") {
+          const liveDirective = animationWithLocalStart(msg.directive);
+          pendingAnimationRef.current = liveDirective;
+          setStageDirective(liveDirective);
         }
         if (msg.type === "speaker_chosen") {
           // Auto-cast: the model picked who answers; release the queued message.
@@ -555,6 +576,8 @@ Boundaries:
           impersonationTextRef.current = "";
           swipeRegenRef.current = null;
           pendingAutoSendRef.current = null;
+          pendingAnimationRef.current = null;
+          setStageDirective(null);
           streamingActiveRef.current = false;
           setIsStreaming(false);
           setStreamingText("");
@@ -575,6 +598,8 @@ Boundaries:
       setIsImpersonating(false);
       swipeRegenRef.current = null;
       pendingAutoSendRef.current = null;
+      pendingAnimationRef.current = null;
+      setStageDirective(null);
       streamingActiveRef.current = false;
       setIsStreaming(false);
       setStreamingText("");
@@ -636,7 +661,12 @@ Boundaries:
     return fullPrompt;
   };
 
-  const updateSystemPrompt = () => {
+  const updateSystemPrompt = (overrides: {
+    stageEnabled?: boolean;
+    includeMood?: boolean;
+    autoScene?: boolean;
+    includeImageGen?: boolean;
+  } = {}) => {
     if (!wsRef.current) return;
     sendJson({
       type: "set_system_prompt",
@@ -644,6 +674,10 @@ Boundaries:
       // Names drive {{char}} / {{user}} macro expansion on the backend.
       char: assistantName,
       user: userName,
+      include_animation: overrides.stageEnabled ?? stageEnabled,
+      include_mood: overrides.includeMood ?? includeMood,
+      auto_scene: overrides.autoScene ?? autoScene,
+      include_imagegen: overrides.includeImageGen ?? includeImageGen,
     });
   };
 
@@ -690,6 +724,10 @@ Boundaries:
         content: composeSystemPromptForCharacter(speaker),
         char: speaker.name,
         user: userName,
+        include_animation: stageEnabled,
+        include_mood: includeMood,
+        auto_scene: autoScene,
+        include_imagegen: includeImageGen,
       });
     } else {
       pendingSpeakerRef.current = null;
@@ -743,6 +781,7 @@ Boundaries:
     setCharacterSystemPrompt(c.systemPrompt);
     setFirstMessage(c.firstMessage);
     setAssistantCharacterImage(c.avatar);
+    setCharacterRigId(c.rigId ?? null);
   };
 
   const selectCharacter = (id: string) => {
@@ -762,6 +801,7 @@ Boundaries:
       systemPrompt: "",
       firstMessage: "",
       avatar: null,
+      rigId: null,
       inScene: true,
     };
     setCharacters((prev) => [...prev, c]);
@@ -827,11 +867,12 @@ Boundaries:
             systemPrompt: characterSystemPrompt,
             firstMessage,
             avatar: assistantCharacterImage,
+            rigId: characterRigId,
           }
         : c
     )));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assistantName, characterDef, personality, characterSystemPrompt, firstMessage, assistantCharacterImage, selectedCharacterId]);
+  }, [assistantName, characterDef, personality, characterSystemPrompt, firstMessage, assistantCharacterImage, characterRigId, selectedCharacterId]);
 
   const handleCharacterUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -867,6 +908,57 @@ Boundaries:
   const importCharacterCard = (event: React.ChangeEvent<HTMLInputElement>) => {
     addCharacter();
     handleCharacterUpload(event);
+  };
+
+  // Uploaded rigs embed a full data-URL image and the whole library is persisted
+  // to localStorage, so keep every rig the cast still points at but only a handful
+  // of recent unused ones — otherwise repeated "Generate" clicks blow the quota.
+  const MAX_SPARE_RIGS = 8;
+
+  const assignRig = (rig: RiggedCharacter) => {
+    setRigAssets((prev) => {
+      const inUse = new Set(
+        [characterRigId, ...characters.map((c) => c.rigId)].filter((id): id is string => !!id)
+      );
+      const referenced = prev.filter((r) => inUse.has(r.id));
+      const spare = prev.filter((r) => !inUse.has(r.id)).slice(-MAX_SPARE_RIGS);
+      return [...referenced, ...spare, rig];
+    });
+    setCharacterRigId(rig.id);
+  };
+
+  const generateRandomRig = () => {
+    assignRig(createGeneratedRig(assistantName || selectedCharacter?.name || "Character"));
+  };
+
+  const generateRigFromAvatar = () => {
+    if (!assistantCharacterImage) {
+      alert("Upload an avatar first, then I can wrap it into a rig.");
+      return;
+    }
+    assignRig(createUploadedRig(assistantName || selectedCharacter?.name || "Character", assistantCharacterImage));
+  };
+
+  const uploadRigImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Please choose an image file");
+      event.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = reader.result as string;
+      assignRig(createUploadedRig(assistantName || selectedCharacter?.name || "Character", image));
+      if (!assistantCharacterImage) setAssistantCharacterImage(image);
+      event.target.value = "";
+    };
+    reader.onerror = () => {
+      alert("Failed to read the image file.");
+      event.target.value = "";
+    };
+    reader.readAsDataURL(file);
   };
 
   const sendTextMessage = () => {
@@ -950,8 +1042,10 @@ Boundaries:
     setLastLlmPayload(null);
     setLastLlmResponse(null);
     setAssistantMood("");
+    setStageDirective(null);
     setSuggestions([]);
     pendingMoodRef.current = "";
+    pendingAnimationRef.current = null;
   };
 
   // Nuke everything — leave no trace. Wipes local persistence (history, settings,
@@ -1006,6 +1100,7 @@ Boundaries:
   const toggleImageGen = (enabled: boolean) => {
     setIncludeImageGen(enabled);
     sendJson({ type: "set_imagegen_mode", enabled });
+    updateSystemPrompt({ includeImageGen: enabled });
   };
 
   // ----- Roleplay enrichment handlers -----
@@ -1031,7 +1126,18 @@ Boundaries:
     sendJson({ type: "set_mood_mode", enabled });
     // Rebuild the system prompt so the mood instruction is added/removed right away.
     // set_mood_mode is sent first, so the backend sees the new flag when it rebuilds.
-    updateSystemPrompt();
+    updateSystemPrompt({ includeMood: enabled });
+  };
+
+  const toggleStage = (enabled: boolean) => {
+    setStageEnabled(enabled);
+    saveSettings({ stageEnabled: enabled });
+    if (!enabled) {
+      setStageDirective(null);
+      pendingAnimationRef.current = null;
+    }
+    sendJson({ type: "set_animation_mode", enabled });
+    updateSystemPrompt({ stageEnabled: enabled });
   };
 
   // ----- Director controls -----
@@ -1095,7 +1201,7 @@ Boundaries:
     setAutoScene(enabled);
     saveSettings({ autoScene: enabled });
     sendJson({ type: "set_autoscene_mode", enabled });
-    updateSystemPrompt();
+    updateSystemPrompt({ autoScene: enabled });
   };
 
   // ----- Immersive / cinematic reading mode -----
@@ -1178,9 +1284,9 @@ Boundaries:
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
       authorNote, authorNoteDepth, includeMood, lorebook,
       responseLength, narrationPerspective, pacing, scene, autoScene,
-      characters, selectedCharacterId,
+      rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
-      useContext, includeImageGen,
+      useContext, includeImageGen, stageEnabled,
       userCharacterImage, assistantCharacterImage,
     },
   });
@@ -1221,18 +1327,20 @@ Boundaries:
       ? session.conversationHistory.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp ?? Date.now()) }))
       : [];
     const s = session?.settings ?? {};
+    const loadedSystemPrompt = upgradeRoleplayPrompt(s.systemPrompt);
 
     // Restore UI state
     if (typeof s.userName === "string") setUserName(s.userName);
     if (typeof s.userPersona === "string") setUserPersona(s.userPersona);
     if (typeof s.assistantName === "string") setAssistantName(s.assistantName);
-    if (typeof s.systemPrompt === "string") setSystemPrompt(s.systemPrompt);
+    setSystemPrompt(loadedSystemPrompt);
     if (typeof s.scenario === "string") setScenario(s.scenario);
     if (typeof s.characterDef === "string") setCharacterDef(s.characterDef);
     if (typeof s.personality === "string") setPersonality(s.personality);
     if (typeof s.authorNote === "string") setAuthorNote(s.authorNote);
     if (typeof s.authorNoteDepth === "number") setAuthorNoteDepth(s.authorNoteDepth);
     if (typeof s.includeMood === "boolean") setIncludeMood(s.includeMood);
+    if (typeof s.stageEnabled === "boolean") setStageEnabled(s.stageEnabled);
     if (Array.isArray(s.lorebook)) setLorebook(s.lorebook);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
@@ -1245,6 +1353,7 @@ Boundaries:
       });
     }
     if (typeof s.autoScene === "boolean") setAutoScene(s.autoScene);
+    if (Array.isArray(s.rigAssets)) setRigAssets(s.rigAssets as RiggedCharacter[]);
     // Restore the character roster (falls back to the legacy single character).
     if (Array.isArray(s.characters) && s.characters.length > 0) {
       const roster = s.characters as Character[];
@@ -1269,15 +1378,18 @@ Boundaries:
     if (typeof s.assistantCharacterImage === "string") setAssistantCharacterImage(s.assistantCharacterImage);
     setConversationHistory(history);
     setAssistantMood("");
+    setStageDirective(null);
+    pendingAnimationRef.current = null;
 
     // Push everything to the backend now, using parsed values (state is async).
     if (wsRef.current) {
       sendJson({ type: "set_mood_mode", enabled: !!s.includeMood });
+      sendJson({ type: "set_animation_mode", enabled: s.stageEnabled !== false });
       sendJson({ type: "set_autoscene_mode", enabled: s.autoScene !== false });
       sendJson({
         type: "set_system_prompt",
         content: composeSystemPrompt({
-          systemPrompt: s.systemPrompt ?? "",
+          systemPrompt: loadedSystemPrompt,
           scenario: s.scenario ?? "",
           characterDef: s.characterDef ?? "",
           personality: s.personality ?? "",
@@ -1286,6 +1398,10 @@ Boundaries:
         }),
         char: s.assistantName ?? assistantName,
         user: s.userName ?? userName,
+        include_animation: s.stageEnabled !== false,
+        include_mood: !!s.includeMood,
+        auto_scene: s.autoScene !== false,
+        include_imagegen: !!s.includeImageGen,
       });
       sendJson({ type: "set_context_mode", enabled: s.useContext !== false });
       sendJson({ type: "set_imagegen_mode", enabled: !!s.includeImageGen });
@@ -1704,6 +1820,7 @@ Boundaries:
       authorNote,
       authorNoteDepth,
       includeMood,
+      stageEnabled,
       immersiveFormatting,
       lorebook,
       responseLength,
@@ -1715,6 +1832,7 @@ Boundaries:
       soundVolume,
       autoCast,
       immersive,
+      rigAssets,
       characters,
       selectedCharacterId,
       userCharacterImage,
@@ -1725,7 +1843,7 @@ Boundaries:
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, immersiveFormatting, lorebook, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, stageEnabled, immersiveFormatting, lorebook, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -1767,6 +1885,7 @@ Boundaries:
       // Mood + auto-scene modes first so the backend includes their instructions
       // when it (re)builds the system prompt just below.
       sendJson({ type: "set_mood_mode", enabled: includeMood });
+      sendJson({ type: "set_animation_mode", enabled: stageEnabled });
       sendJson({ type: "set_autoscene_mode", enabled: autoScene });
       updateSystemPrompt();
       sendJson({ type: "set_context_mode", enabled: useContext });
@@ -1775,7 +1894,7 @@ Boundaries:
       sendJson({ type: "set_author_note", note: authorNote, depth: authorNoteDepth });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
-      sendJson({ type: "set_llm_model", model: llmModel });
+      if (llmModel) sendJson({ type: "set_llm_model", model: llmModel });
       sendJson({ type: "set_llm_host", host: llmHost });
       sendJson({ type: "set_output_mode", mode: outputMode });
       fetchAvailableVoices();
@@ -1910,6 +2029,11 @@ Boundaries:
           showRealtimePanel={showRealtimePanel}
           userCharacterImage={userCharacterImage}
           assistantCharacterImage={assistantCharacterImage}
+          inSceneCharacters={inSceneCharacters}
+          selectedCharacterId={selectedCharacterId}
+          rigAssets={rigAssets}
+          stageEnabled={stageEnabled}
+          stageDirective={stageDirective}
           assistantMood={assistantMood}
           streamingText={streamingText}
           isStreaming={isStreaming}
@@ -1929,6 +2053,7 @@ Boundaries:
           onVoiceChange={changeVoice}
           onToggleContext={toggleContext}
           onToggleImageGen={toggleImageGen}
+          onToggleStage={toggleStage}
           onClearChat={clearChat}
           onStopAudio={() => {
             player.resetQueue();
@@ -2058,6 +2183,8 @@ Boundaries:
         systemPrompt={characterSystemPrompt}
         firstMessage={firstMessage}
         avatar={assistantCharacterImage}
+        rigAssets={rigAssets}
+        rigId={characterRigId}
         userName={userName}
         userPersona={userPersona}
         userAvatar={userCharacterImage}
@@ -2075,6 +2202,10 @@ Boundaries:
         onSystemPromptChange={setCharacterSystemPrompt}
         onFirstMessageChange={setFirstMessage}
         onAvatarChange={setAssistantCharacterImage}
+        onRigChange={setCharacterRigId}
+        onGenerateRig={generateRandomRig}
+        onCreateRigFromAvatar={generateRigFromAvatar}
+        onRigImageUpload={uploadRigImage}
         onUserNameChange={setUserName}
         onUserPersonaChange={setUserPersona}
         onUserAvatarChange={(dataUrl) => {

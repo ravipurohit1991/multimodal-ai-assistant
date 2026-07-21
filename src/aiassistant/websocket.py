@@ -14,8 +14,26 @@ from urllib.parse import urlparse
 from fastapi import WebSocket, WebSocketDisconnect
 
 from aiassistant.config import config
+from aiassistant.control_tags import (
+    MOOD_TAG_RE,
+    SCENE_TAG_RE,
+    StreamingHiddenTagFilter,
+    find_animation_tag_body,
+    generate_animation_directive_from_reply,
+    parse_animation_tag,
+    strip_animation_tags,
+)
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
+from aiassistant.prompts import (
+    DEFAULT_ROLEPLAY_PROMPT,
+    build_chat_system_prompt,
+    build_image_prompt_messages,
+    build_impersonation_messages,
+    build_reply_suggestion_messages,
+    build_speaker_selection_messages,
+    select_speaker_candidate,
+)
 from aiassistant.roleplay import apply_placeholders, build_llm_messages, parse_scene_tag
 from aiassistant.state import ConnState, cancel_llm
 from aiassistant.utils import (
@@ -44,12 +62,6 @@ def _wipe_origin_allowed(origin: str, host: str) -> bool:
     if origin_host and origin_host == host.split(":", 1)[0].lower():
         return True
     return origin in config.cors_allow_origins
-
-
-# Matches a single mood/emotion tag, e.g. "[mood: flirty]" or "[emotion: sad]"
-MOOD_TAG_RE = re.compile(r"\[(?:mood|emotion):\s*([^\]]+)\]", re.IGNORECASE)
-# Matches a scene-progression tag, e.g. "[SCENE: time=night; weather=rain]"
-SCENE_TAG_RE = re.compile(r"\[SCENE:\s*([^\]]+)\]", re.IGNORECASE)
 
 
 async def ws_endpoint(ws: WebSocket):
@@ -221,7 +233,7 @@ async def ws_endpoint(ws: WebSocket):
         # Prepare messages for LLM. build_llm_messages assembles a fresh copy with
         # Lorebook knowledge, the Author's Note, and the Director/scene-style
         # directive injected, honoring context mode.
-        llm_messages = build_llm_messages(state, no_context_user_text=user_text)
+        llm_messages = build_llm_messages(state, no_context_user_text=user_message_content)
         # The Director's one-shot beat steers exactly one reply, then is cleared.
         if state.director_beat:
             logger.info(f"Director beat consumed: {state.director_beat[:80]}")
@@ -259,8 +271,9 @@ async def ws_endpoint(ws: WebSocket):
         tts_engine = engine_manager.tts_engine
         assert tts_engine is not None, "TTS engine not initialized"
 
-        # Initialize text filter for TTS
+        # Initialize text/display filters for streamed output.
         text_filter = StreamingTextFilter()
+        display_filter = StreamingHiddenTagFilter()
 
         # Generation stats for the UI: wall time + a chunk-based token estimate
         # (Ollama streams roughly one token per delta).
@@ -278,17 +291,16 @@ async def ws_endpoint(ws: WebSocket):
                 filtered_delta = text_filter.process(delta)
                 buf += filtered_delta
 
-                # Remove IMAGE, SCENE, and mood tags from display (but keep other
-                # tags like [laugh], [gasp])
-                display_delta = re.sub(r"\[IMAGE:\s*[^\]]+\]", "", delta, flags=re.IGNORECASE)
-                display_delta = SCENE_TAG_RE.sub("", display_delta)
-                display_delta = MOOD_TAG_RE.sub("", display_delta)
+                # Remove hidden IMAGE, SCENE, mood, and animation tags from display
+                # across chunk boundaries, while keeping ordinary tags like [laugh].
+                display_delta = display_filter.process(delta)
 
                 # Detect if IMAGE tags were present
                 if re.search(r"\[IMAGE:\s*[^\]]+\]", delta, re.IGNORECASE):
                     logger.debug(f"IMAGE tag detected in: {delta[:100]}")
 
-                await send_json({"type": "assistant_delta", "delta": display_delta})
+                if display_delta:
+                    await send_json({"type": "assistant_delta", "delta": display_delta})
 
                 ready, buf = phrase_chunker(buf)
                 for phrase in ready:
@@ -319,6 +331,12 @@ async def ws_endpoint(ws: WebSocket):
                         await ws.send_bytes(audio.pcm16le)
                         await send_json({"type": "audio_end"})
                         state.speaking = False
+
+            # Flush any delayed display text (for example a normal bracketed tag
+            # that looked briefly like a hidden control tag while streaming).
+            display_tail = display_filter.flush()
+            if display_tail:
+                await send_json({"type": "assistant_delta", "delta": display_tail})
 
             # flush remaining buffer
 
@@ -374,16 +392,7 @@ async def ws_endpoint(ws: WebSocket):
                     for img_prompt_raw in image_requests:
                         # Use LLM to optimize the prompt to be concise (under 40 words)
                         logger.info("Optimizing image prompt...")
-                        optimization_messages = [
-                            {
-                                "role": "system",
-                                "content": "You are a concise image prompt optimizer. Convert descriptions into short, focused image prompts using comma-separated keywords. Focus on: pose, action, clothing, setting, lighting. Maximum 40 words. No full sentences.",
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Optimize this image description into a concise prompt:\n{img_prompt_raw.strip()}",
-                            },
-                        ]
+                        optimization_messages = build_image_prompt_messages(img_prompt_raw)
 
                         optimized_prompt = ""
                         temp_client = OllamaClient(
@@ -482,8 +491,40 @@ async def ws_endpoint(ws: WebSocket):
                 mood = mood_match.group(1).strip()
                 logger.info(f"Character mood: {mood}")
                 await send_json({"type": "mood", "mood": mood})
+
             stored_full = MOOD_TAG_RE.sub("", full)
+            stored_full = strip_animation_tags(stored_full)
             stored_full = SCENE_TAG_RE.sub("", stored_full).strip()
+
+            animation_body = find_animation_tag_body(full)
+            if state.include_animation and animation_body:
+                directive = parse_animation_tag(animation_body)
+                if speaker_name:
+                    directive["speaker"] = speaker_name
+                logger.info(f"Stage animation: {directive}")
+                await send_json({"type": "animation_directive", "directive": directive})
+            elif state.include_animation:
+                logger.info(
+                    "Animation mode enabled, but no ANIM/POSE/ACTION tag found; "
+                    "asking LLM for a rig motion plan"
+                )
+                try:
+                    directive = await generate_animation_directive_from_reply(
+                        stored_full,
+                        llm_host=state.llm_host,
+                        llm_model=state.llm_model,
+                        character_name=speaker_name or state.char_name,
+                        user_name=state.user_name,
+                    )
+                    if directive:
+                        if speaker_name:
+                            directive["speaker"] = speaker_name
+                        logger.info(f"Stage animation fallback: {directive}")
+                        await send_json({"type": "animation_directive", "directive": directive})
+                    else:
+                        logger.info("Animation fallback produced no usable rig motion")
+                except Exception as e:
+                    logger.warning(f"Animation fallback failed: {e}")
 
             # In group scenes, keep the reply attributed to its speaker in the
             # backend history so the model can track who said what next turn.
@@ -498,9 +539,7 @@ async def ws_endpoint(ws: WebSocket):
                     "approx_tokens": delta_count,
                 }
             )
-            logger.info(
-                f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)"
-            )
+            logger.info(f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)")
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -528,26 +567,10 @@ async def ws_endpoint(ws: WebSocket):
                 except Exception:
                     pass  # Connection likely already closed
 
-    async def handle_set_system_prompt(data: dict[str, str]):
+    async def handle_set_system_prompt(data: dict):
         """Handle system prompt update"""
-        default = """
-You are {{char}}, the character in an immersive, collaborative roleplay with {{user}}. Stay fully in character as {{char}} at all times and treat this as a living, evolving story you are co-writing.
-
-Bringing {{char}} to life:
-- Show, don't tell. Convey {{char}}'s emotions through actions, body language, expression, and tone rather than naming the feeling outright. Ground every reply in the present scene with concrete sensory detail (sight, sound, touch, smell).
-- Keep {{char}}'s personality, voice, speech patterns, and motivations consistent. Let {{char}} have independent desires and react authentically — including hesitation, disagreement, refusal, or surprise when they fit.
-- Drive the scene forward. Take initiative, raise questions, introduce small developments. Never stall, and never simply echo or summarize what {{user}} just said.
-- Keep prose fresh: vary sentence structure and avoid reusing phrasing from earlier replies. Favor vivid specifics over purple, over-written description.
-
-Formatting:
-- Wrap actions and narration in *asterisks*. Put spoken words in "double quotes". Render {{char}}'s private thoughts in *italics* from a first-person view — remember other characters cannot hear thoughts.
-
-Boundaries:
-- Only ever write for {{char}} and the surrounding world. Never speak, act, decide, or narrate the thoughts of {{user}} — their choices are theirs alone.
-- Keep the story immersive and tasteful; let emotional depth and tension carry the scene, and fade to scene transitions rather than depicting explicit content.
-- If {{user}} sends an out-of-character note (in parentheses or prefixed with "OOC:"), treat it as direction, adjust accordingly, and continue the story without breaking immersion.
-""".strip()
-        base_content = str(data.get("content", default))
+        raw_content = data.get("content", DEFAULT_ROLEPLAY_PROMPT)
+        base_content = raw_content if isinstance(raw_content, str) else DEFAULT_ROLEPLAY_PROMPT
 
         # Capture the character/user names so {{char}} / {{user}} macros (and the
         # Director directives) expand correctly across the whole conversation.
@@ -557,6 +580,18 @@ Boundaries:
             state.char_name = char_name
         if user_name:
             state.user_name = user_name
+
+        # Let set_system_prompt carry the prompt feature flags too. This keeps
+        # frontend visual state and backend prompt instructions in sync even when
+        # the app swaps system prompts per speaker.
+        if "include_animation" in data:
+            state.include_animation = bool(data.get("include_animation"))
+        if "include_mood" in data:
+            state.include_mood = bool(data.get("include_mood"))
+        if "auto_scene" in data:
+            state.auto_scene = bool(data.get("auto_scene"))
+        if "include_imagegen" in data:
+            state.include_imagegen = bool(data.get("include_imagegen"))
 
         # Extract character description if present (for image generation)
         # Look for ### Character Description section
@@ -569,40 +604,13 @@ Boundaries:
                 f"Character description extracted for image generation: {state.character_description[:100]}..."
             )
 
-        # Use base content as system content (no special TTS tags)
-        system_content = base_content
-
-        # Add image generation instructions if available AND enabled
-        if engine_manager.image_generator is not None and state.include_imagegen:
-            system_content += """
-
-IMAGE GENERATION:
-You can generate images during conversation using the [IMAGE: description] tag.
-When the user asks for a selfie, photo, or picture, or when you want to show them something visually, use this tag.
-
-Examples:
-- User: "Send me a selfie!" → Response: "Sure! Here's a selfie for you. [IMAGE: taking a selfie, smiling at camera, casual pose]"
-- User: "Show me what you're wearing" → Response: "Let me show you! [IMAGE: full body shot, standing pose, showing outfit]"
-- During conversation you can proactively send images: "The sunset here is beautiful! [IMAGE: looking at sunset, golden hour lighting, scenic background]"
-
-The image will be generated with your character description automatically. Keep the IMAGE tag description focused on the scene, pose, and context."""
-
-        # Add scene-progression instructions if enabled
-        if state.auto_scene:
-            system_content += """
-
-SCENE PROGRESSION:
-When the setting meaningfully shifts — a move to a new place, the passage of time, or a change in weather — emit a single hidden scene tag on its own line, in this exact format:
-[SCENE: time=<dawn|morning|midday|afternoon|dusk|night>; weather=<clear|cloudy|rain|storm|snow|fog|wind>; location=<short place>]
-Include only the fields that actually changed and omit the rest. This tag is stripped before the user sees it and is used purely to update the on-screen scene. Never mention, describe, or acknowledge the tag — keep narrating naturally."""
-
-        # Add mood expression instructions if enabled
-        if state.include_mood:
-            system_content += """
-
-MOOD EXPRESSION:
-Begin every reply with a single hidden mood tag in square brackets that reflects your character's current emotional state, for example: [mood: happy], [mood: nervous], [mood: flirty], [mood: angry], [mood: sad], [mood: playful].
-Use one or two words only. This tag is stripped before the user sees it and is used purely to drive the on-screen mood indicator, so place it at the very start and then continue your response naturally."""
+        system_content = build_chat_system_prompt(
+            base_content,
+            image_generation=engine_manager.image_generator is not None and state.include_imagegen,
+            auto_scene=state.auto_scene,
+            mood=state.include_mood,
+            animation=state.include_animation,
+        )
 
         # Expand {{char}} / {{user}} macros now so the stored system prompt (and
         # everything derived from it) reads with real names instead of literals.
@@ -613,7 +621,11 @@ Use one or two words only. This tag is stripped before the user sees it and is u
         state.messages.insert(0, {"role": "system", "content": system_content})
 
         logger.info(
-            f"System prompt updated (engine: {state.tts_engine_type}): {system_content[:150]}..."
+            f"System prompt updated (engine: {state.tts_engine_type}, "
+            f"animation={'on' if state.include_animation else 'off'}, "
+            f"mood={'on' if state.include_mood else 'off'}, "
+            f"auto_scene={'on' if state.auto_scene else 'off'}): "
+            f"{system_content[:150]}..."
         )
         await send_json({"type": "ack", "system_prompt_updated": True})
 
@@ -745,6 +757,13 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                     state.include_mood = bool(data.get("enabled", False))
                     logger.info(f"Mood mode: {'enabled' if state.include_mood else 'disabled'}")
                     await send_json({"type": "ack", "include_mood": state.include_mood})
+
+                elif mtype == "set_animation_mode":
+                    state.include_animation = bool(data.get("enabled", True))
+                    logger.info(
+                        f"Animation mode: {'enabled' if state.include_animation else 'disabled'}"
+                    )
+                    await send_json({"type": "ack", "include_animation": state.include_animation})
 
                 elif mtype == "set_style":
                     # Persistent Director dials: response length, prose perspective, pacing.
@@ -911,28 +930,9 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                                 system_msgs = [m for m in state.messages if m["role"] == "system"]
                                 history = system_msgs
 
-                            hint_block = ""
-                            if user_hint:
-                                hint_block = (
-                                    "\n"
-                                    "Additional guidance from the user draft, write a message as per the hint below: "
-                                    f"{user_hint}\n"
-                                )
-
-                            impersonation_messages = list(history) + [
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        f"[SYSTEM INSTRUCTION - DO NOT INCLUDE IN REPLY]\n"
-                                        f"You are now roleplaying as {user_name}, the human in this conversation. "
-                                        f"Based on the conversation so far, write what {user_name} would naturally "
-                                        f"say next. Respond ONLY as {user_name} in first person. "
-                                        f"Do NOT include any narration, assistant commentary, or character actions. "
-                                        f"Write only the dialogue/message that {user_name} would send."
-                                        f"{hint_block}"
-                                    ),
-                                }
-                            ]
+                            impersonation_messages = build_impersonation_messages(
+                                history, user_name, user_hint
+                            )
 
                             full_text = ""
                             temp_client = OllamaClient(
@@ -966,9 +966,7 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                     # naturally speaks next. Purely advisory — the frontend then
                     # requests the actual reply for the chosen character.
                     candidates = [
-                        str(c).strip()
-                        for c in (data.get("candidates") or [])
-                        if str(c).strip()
+                        str(c).strip() for c in (data.get("candidates") or []) if str(c).strip()
                     ]
                     if not candidates:
                         await send_json({"type": "speaker_chosen", "name": ""})
@@ -976,34 +974,8 @@ Use one or two words only. This tag is stripped before the user sees it and is u
 
                     async def choose_speaker_task(candidates: list[str] = candidates):
                         try:
-                            convo = [
-                                m for m in state.messages if m.get("role") != "system"
-                            ][-8:]
-                            transcript = "\n".join(
-                                f"{m.get('role', 'user')}: {str(m.get('content', ''))[:300]}"
-                                for m in convo
-                            )
-                            roster = ", ".join(candidates)
-                            prompt_messages = [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "You are the scene director of a group roleplay. "
-                                        "Given the recent conversation and the characters "
-                                        "present, decide which character would most "
-                                        "naturally speak next. Reply with exactly one "
-                                        "name from the list, nothing else."
-                                    ),
-                                },
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        f"Characters present: {roster}\n\n"
-                                        f"Recent conversation:\n{transcript}\n\n"
-                                        f"Who speaks next? Answer with one name from: {roster}"
-                                    ),
-                                },
-                            ]
+                            convo = [m for m in state.messages if m.get("role") != "system"][-8:]
+                            prompt_messages = build_speaker_selection_messages(candidates, convo)
                             raw = ""
                             temp_client = OllamaClient(
                                 host=state.llm_host, default_model=state.llm_model
@@ -1014,26 +986,14 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                                 raw += delta
                                 if len(raw) > 200:
                                     break
-                            # Match a candidate name anywhere in the output; first
-                            # (earliest) mention wins. Fall back to round-robin-ish
-                            # first candidate so the scene never stalls.
-                            lowered = raw.lower()
-                            best = ""
-                            best_pos = len(lowered) + 1
-                            for name in candidates:
-                                pos = lowered.find(name.lower())
-                                if pos != -1 and pos < best_pos:
-                                    best, best_pos = name, pos
-                            chosen = best or candidates[0]
+                            chosen = select_speaker_candidate(raw, candidates)
                             logger.info(f"Auto-cast chose next speaker: {chosen}")
                             await send_json({"type": "speaker_chosen", "name": chosen})
                         except asyncio.CancelledError:
                             raise
                         except Exception as e:
                             logger.error(f"choose_speaker error: {e}")
-                            await send_json(
-                                {"type": "speaker_chosen", "name": candidates[0]}
-                            )
+                            await send_json({"type": "speaker_chosen", "name": candidates[0]})
 
                     state.llm_task = asyncio.create_task(choose_speaker_task(candidates))
 
@@ -1047,19 +1007,7 @@ Use one or two words only. This tag is stripped before the user sees it and is u
                             system_msgs = [m for m in state.messages if m["role"] == "system"]
                             history = state.messages if state.use_context else system_msgs
 
-                            suggest_messages = list(history) + [
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        "[SYSTEM INSTRUCTION - DO NOT ROLEPLAY THIS TURN]\n"
-                                        f"Suggest exactly 3 distinct, short replies that {user_name} "
-                                        f"(the human) could send next to move the scene forward. Vary the "
-                                        f"tone (e.g. curious, bold, cautious). Write each from {user_name}'s "
-                                        f"first-person point of view, one per line, prefixed with '- '. "
-                                        f"Keep each under 20 words. Output only the 3 lines, nothing else."
-                                    ),
-                                }
-                            ]
+                            suggest_messages = build_reply_suggestion_messages(history, user_name)
 
                             full_text = ""
                             temp_client = OllamaClient(

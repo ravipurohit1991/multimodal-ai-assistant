@@ -70,7 +70,9 @@ class ConfigManager:
         """Initialize LLM configuration"""
         self.llm_host = os.getenv("LLM_HOST", "http://localhost:11434")
         # or set cloud api for ollama https://ollama.com for cloud models
-        self.llm_model = os.getenv("LLM_MODEL", "deepseek-v4-flash:cloud")
+        # No default: the user picks a model in the UI, and an unset value keeps
+        # the backend from silently pinning a model that may not be installed.
+        self.llm_model = os.getenv("LLM_MODEL") or None
         # Ollama can run locally and use GPU/CPU
         self.llm_device = os.getenv("LLM_DEVICE", "auto")
         # auto, cuda, cpu
@@ -189,9 +191,7 @@ class ConfigManager:
         2. for lower vram, use the 2B model: "Qwen/Qwen3-VL-2B-Instruct"
         """
         self.imageexplainer_enabled = os.getenv("IMAGEEXPLAINER_ENABLED", "true").lower() == "true"
-        self.imageexplainer_model = os.getenv(
-            "IMAGEEXPLAINER_MODEL", "Qwen/Qwen3-VL-2B-Instruct"
-        )
+        self.imageexplainer_model = os.getenv("IMAGEEXPLAINER_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
         self.imageexplainer_device = os.getenv("IMAGEEXPLAINER_DEVICE", "auto")
         self.imageexplainer_max_tokens = int(os.getenv("IMAGEEXPLAINER_MAX_TOKENS", "256"))
 

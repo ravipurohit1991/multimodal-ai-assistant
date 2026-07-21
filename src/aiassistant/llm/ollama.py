@@ -19,7 +19,7 @@ class OllamaClient(LLMEngine):
     def __init__(
         self,
         host: str,
-        default_model: str = "deepseek-v4-flash:cloud",
+        default_model: str | None = None,
         device: str = "auto",
         keep_alive: str = "5m",
     ):
@@ -53,6 +53,9 @@ class OllamaClient(LLMEngine):
         Yields:
             Text deltas from the model
         """
+        if model is None and self.default_model is None:
+            raise ValueError("No model specified and no default model set")
+
         url = f"{self.host}/api/chat"
         headers = {}
         requested_model = model or self.default_model
@@ -216,6 +219,8 @@ class OllamaClient(LLMEngine):
         Returns dict with size_gb, processor_info, etc.
         """
         if not self._is_local:
+            return {}
+        if not self.default_model:
             return {}
 
         try:
