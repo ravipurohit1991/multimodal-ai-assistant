@@ -49,6 +49,7 @@ Here is the redesigned story workspace running with demo conversation data: loca
 - **Narrator beats** — drop in omniscient scene narration the characters react to, rendered as distinct scene lines
 - **Cinematic mode** — a one-click focused reading view with book typography (Literata) and a mood/scene-reactive backdrop
 - **Director controls** — steer length, perspective, pacing, and one-shot scene cues live, without editing prompts
+- **Idle presence** — let the character speak first: when you go quiet, they can take a turn of their own rather than waiting to be spoken to. Off by default; dial in how forward they are and how long a silence they'll sit through
 - **Story memory** — long stories outgrow a local model's context window, so the model keeps a rolling record of what already happened: older turns are folded into a "story so far" and sent as one compact block while recent exchanges still go out word for word. It maintains itself in the background, and you can read, correct, or rebuild the record at any time
 - **Story library** — park a whole story (chat, cast, lorebook, settings) on the backend and pick it up later; export any conversation as a Markdown story
 - Lorebook/World Info, Author's Note, moods, swipes, per-reply generation stats, and SillyTavern-compatible character cards

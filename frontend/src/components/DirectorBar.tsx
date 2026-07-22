@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Theme } from "../theme";
-import { ResponseLength, NarrationPerspective, Pacing } from "../types";
+import { ResponseLength, NarrationPerspective, Pacing, PresenceState, PresenceMode } from "../types";
 import { IconChevronRight, IconClapper, IconX } from "./Icons";
 
 interface DirectorBarProps {
@@ -10,12 +10,15 @@ interface DirectorBarProps {
   pacing: Pacing;
   /** The one-shot cue currently queued for the next reply ("" when none). */
   pendingBeat: string;
+  /** Whether — and after how long a silence — the character may speak first. */
+  presence: PresenceState;
   theme: Theme;
   onLengthChange: (v: ResponseLength) => void;
   onPerspectiveChange: (v: NarrationPerspective) => void;
   onPacingChange: (v: Pacing) => void;
   onBeat: (cue: string) => void;
   onClearBeat: () => void;
+  onPresenceChange: (next: PresenceState) => void;
 }
 
 // One-shot scene beats. `cue` is the instruction sent to the model for the next
@@ -50,6 +53,20 @@ const PACINGS: { v: Pacing; label: string; title: string }[] = [
   { v: "advance", label: "Advance", title: "Keep the plot moving" },
 ];
 
+const PRESENCES: { v: PresenceMode; label: string; title: string }[] = [
+  { v: "off", label: "Off", title: "The character only ever answers you" },
+  { v: "rarely", label: "Rarely", title: "One quiet beat after a long silence" },
+  { v: "often", label: "Often", title: "Speaks up readily, up to a few beats in a row" },
+];
+
+// Offered quiet windows. Anything shorter than half a minute reads as impatience
+// rather than presence, so the shortest option is deliberately not shorter.
+const QUIET_WINDOWS = [30, 60, 90, 120, 300, 600];
+
+function formatQuiet(seconds: number): string {
+  return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)} min`;
+}
+
 /**
  * Director Bar — live, in-the-moment control over how the character writes.
  *
@@ -63,12 +80,14 @@ export function DirectorBar({
   narrationPerspective,
   pacing,
   pendingBeat,
+  presence,
   theme,
   onLengthChange,
   onPerspectiveChange,
   onPacingChange,
   onBeat,
   onClearBeat,
+  onPresenceChange,
 }: DirectorBarProps) {
   const [open, setOpen] = useState(false);
   const [customCue, setCustomCue] = useState("");
@@ -189,6 +208,40 @@ export function DirectorBar({
             <Field label="Pacing">
               <Segmented value={pacing} options={PACINGS} onChange={onPacingChange} />
             </Field>
+          </div>
+
+          {/* Idle presence — whether the character fills a silence on their own */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
+            <Field label="Presence">
+              <Segmented
+                value={presence.mode}
+                options={PRESENCES}
+                onChange={(mode) => onPresenceChange({ ...presence, mode })}
+              />
+            </Field>
+            {presence.mode !== "off" && (
+              <Field label="After">
+                <select
+                  className="input"
+                  disabled={!connected}
+                  value={presence.idleSeconds}
+                  title="How long the room stays quiet before the character speaks first"
+                  onChange={(e) => onPresenceChange({ ...presence, idleSeconds: Number(e.target.value) })}
+                  style={{ fontSize: 12, padding: "4px 6px" }}
+                >
+                  {QUIET_WINDOWS.map((s) => (
+                    <option key={s} value={s}>{formatQuiet(s)} of quiet</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            <span style={{ fontSize: 11.5, color: theme.colors.textTertiary }}>
+              {presence.mode === "off"
+                ? "The character waits to be spoken to."
+                : presence.mode === "rarely"
+                  ? "After a long silence, one quiet beat — then they wait again."
+                  : "They'll fill a lull on their own, a few beats before falling quiet."}
+            </span>
           </div>
 
           {/* One-shot scene beats */}

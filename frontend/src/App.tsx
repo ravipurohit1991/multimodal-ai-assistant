@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -201,6 +201,18 @@ export default function App() {
   const [pacing, setPacing] = useState<Pacing>((savedSettings.pacing as Pacing) || "steady");
   const [pendingBeat, setPendingBeat] = useState("");
 
+  // Idle presence — the character taking a turn on their own when the room goes
+  // quiet. The browser holds the clock because only it can see typing, the mic,
+  // an open modal, and whether the window is even in front of the user.
+  const [presence, setPresence] = useState<PresenceState>({
+    ...DEFAULT_PRESENCE,
+    ...(savedSettings.presence || {}),
+  });
+  const lastActivityRef = useRef<number>(Date.now());
+  // Set when we ask for a beat, so the reply that comes back can be marked as
+  // unprompted — and cleared if the backend declines the ask.
+  const expectingPresenceRef = useRef(false);
+
   // Scene atmosphere — a persistent sense of place (time / weather / location)
   // that grounds the character and drives the app's ambient theming.
   const [scene, setScene] = useState<SceneState>(
@@ -360,6 +372,7 @@ export default function App() {
         if (msg.type === "ack_recording") setRecording(msg.recording);
         if (msg.type === "transcript") {
           setTranscript(msg.text);
+          lastActivityRef.current = Date.now();
           if (msg.text) {
             setConversationHistory(prev => [...prev, { role: "user", content: msg.text, timestamp: new Date() }]);
           }
@@ -386,6 +399,8 @@ export default function App() {
         if (msg.type === "assistant_cancelled") {
           setIsSendingMessage(false);
           setIsContinuing(false);
+          expectingPresenceRef.current = false;
+          lastActivityRef.current = Date.now();
           swipeRegenRef.current = null;
           pendingAutoSendRef.current = null;
           pendingAnimationRef.current = null;
@@ -433,6 +448,12 @@ export default function App() {
           // generation start so it lands on the right message.
           const sp = pendingSpeakerRef.current;
           const attribution = sp ? { speaker: sp.name, ...(sp.avatar ? { characterImage: sp.avatar } : {}) } : {};
+          // Whether the character spoke into a silence rather than answering.
+          const spokeFirst = expectingPresenceRef.current;
+          expectingPresenceRef.current = false;
+          // A finished reply restarts the quiet window — including after a beat,
+          // so consecutive beats are spaced out rather than fired back to back.
+          lastActivityRef.current = Date.now();
           if (swipeTarget !== null) {
             // This generation was a "swipe" — fold the new text into the target
             // message's alternatives instead of appending a new message.
@@ -470,6 +491,7 @@ export default function App() {
               timestamp: new Date(),
               ...(mood && { mood }),
               ...(animation && { animation }),
+              ...(spokeFirst && { unprompted: true }),
               ...attribution,
               ...stats,
             }]);
@@ -506,6 +528,15 @@ export default function App() {
         if (msg.type === "suggestions") {
           setSuggestions(msg.items || []);
           setIsSuggesting(false);
+        }
+        if (msg.type === "presence_beat") {
+          // The backend has the final say on whether the character may speak
+          // first. On a refusal, restart the quiet window so we ask again after
+          // a full silence instead of hammering it every tick.
+          if (!msg.accepted) {
+            expectingPresenceRef.current = false;
+            lastActivityRef.current = Date.now();
+          }
         }
         if (msg.type === "director_beat_consumed") {
           // The backend used the queued one-shot cue for this reply; clear the chip.
@@ -596,6 +627,8 @@ export default function App() {
           setInputError(msg.message || "Request failed. Please try again.");
 
           // Reset all pending UI states so buttons never remain stuck.
+          expectingPresenceRef.current = false;
+          lastActivityRef.current = Date.now();
           setIsSendingMessage(false);
           setIsContinuing(false);
           isImpersonatingRef.current = false;
@@ -622,6 +655,8 @@ export default function App() {
       setConnected(false);
       setIsSendingMessage(false);
       setIsContinuing(false);
+      expectingPresenceRef.current = false;
+      lastActivityRef.current = Date.now();
       isImpersonatingRef.current = false;
       setIsImpersonating(false);
       swipeRegenRef.current = null;
@@ -995,6 +1030,7 @@ export default function App() {
 
   const sendTextMessage = () => {
     if (!wsRef.current || (!textInput.trim() && !attachedImage)) return;
+    markActivity();
     setInputError(null);
     setSuggestions([]);
     setIsSendingMessage(true);
@@ -1038,6 +1074,7 @@ export default function App() {
   const sendNarration = () => {
     const text = textInput.trim();
     if (!wsRef.current || !text) return;
+    markActivity();
     setInputError(null);
     setSuggestions([]);
     setIsSendingMessage(true);
@@ -1258,6 +1295,59 @@ export default function App() {
     sendJson({ type: "set_director_beat", beat: "" });
   };
 
+  // ----- Idle presence -----
+  const updatePresence = (next: PresenceState) => {
+    setPresence(next);
+    saveSettings({ presence: next });
+    lastActivityRef.current = Date.now(); // changing the dial restarts the wait
+    sendJson({ type: "set_presence", mode: next.mode, idle_seconds: next.idleSeconds });
+  };
+
+  // Everything that counts as the user still being in the room. Called from the
+  // composer, the mic, and the message actions so a beat never lands mid-thought.
+  const markActivity = () => {
+    lastActivityRef.current = Date.now();
+  };
+
+  // One tick of the quiet clock, refreshed every render so the interval below
+  // never fires against a stale speaker, mode, or busy flag.
+  const presenceTickRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    presenceTickRef.current = () => {
+      // Never speak over the user, into an empty story, or at a window they are
+      // not even looking at — a beat nobody sees still costs a generation.
+      if (isSendingMessage || isContinuing || isImpersonating || isStreaming) return;
+      if (recording || inCall || expectingPresenceRef.current) return;
+      if (showSettings || showCharacterManager || showLorebook || showMemory || showSessions) return;
+      if (conversationHistory.length === 0) return;
+      if (document.visibilityState !== "visible") return;
+
+      const waitMs = presence.idleSeconds * 1000 * PRESENCE_WAIT_FACTOR[presence.mode];
+      const quietMs = Date.now() - lastActivityRef.current;
+      if (quietMs < waitMs) return;
+
+      // Ask; the backend decides. It may well say no (it counts how many beats
+      // have already stacked up), which is why nothing is rendered until a
+      // reply actually starts streaming.
+      expectingPresenceRef.current = true;
+      prepareTurnForSpeaker();
+      sendJson({
+        type: "presence_beat",
+        quiet_seconds: Math.round(quietMs / 1000),
+        ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {}),
+      });
+    };
+  });
+
+  // A single interval rather than a timeout rescheduled on every keystroke: it
+  // cannot leak timers, and a tab that was asleep simply finds the silence
+  // already over when it wakes.
+  useEffect(() => {
+    if (!connected || presence.mode === "off") return;
+    const id = window.setInterval(() => presenceTickRef.current(), 2000);
+    return () => window.clearInterval(id);
+  }, [connected, presence.mode]);
+
   // ----- Scene atmosphere -----
   // Push the scene to the backend (grounds every reply) and persist it locally.
   const updateScene = (next: SceneState) => {
@@ -1359,7 +1449,7 @@ export default function App() {
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
       authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory,
-      responseLength, narrationPerspective, pacing, scene, autoScene,
+      responseLength, narrationPerspective, pacing, scene, autoScene, presence,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
       useContext, includeImageGen, stageEnabled,
@@ -1435,6 +1525,10 @@ export default function App() {
       });
     }
     if (typeof s.autoScene === "boolean") setAutoScene(s.autoScene);
+    const loadedPresence: PresenceState = { ...DEFAULT_PRESENCE, ...(s.presence || {}) };
+    setPresence(loadedPresence);
+    expectingPresenceRef.current = false;
+    lastActivityRef.current = Date.now();
     if (Array.isArray(s.rigAssets)) setRigAssets(s.rigAssets as RiggedCharacter[]);
     // Restore the character roster (falls back to the legacy single character).
     if (Array.isArray(s.characters) && s.characters.length > 0) {
@@ -1505,6 +1599,11 @@ export default function App() {
         time: s.scene?.time ?? "",
         weather: s.scene?.weather ?? "",
         location: s.scene?.location ?? "",
+      });
+      sendJson({
+        type: "set_presence",
+        mode: loadedPresence.mode,
+        idle_seconds: loadedPresence.idleSeconds,
       });
       setPendingBeat("");
       if (s.llmModel) sendJson({ type: "set_llm_model", model: s.llmModel });
@@ -1754,6 +1853,7 @@ export default function App() {
 
   const startRecording = async () => {
     if (!wsRef.current) return;
+    markActivity();
     sendJson({ type: "interrupt" }); // barge-in: stop the assistant
     player.resetQueue();
 
@@ -2002,6 +2102,9 @@ export default function App() {
       });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
+      sendJson({ type: "set_presence", mode: presence.mode, idle_seconds: presence.idleSeconds });
+      // A reconnect is not a silence the character should fill; start the clock now.
+      lastActivityRef.current = Date.now();
       if (llmModel) sendJson({ type: "set_llm_model", model: llmModel });
       sendJson({ type: "set_llm_host", host: llmHost });
       sendJson({ type: "set_output_mode", mode: outputMode });
@@ -2112,12 +2215,14 @@ export default function App() {
           narrationPerspective={narrationPerspective}
           pacing={pacing}
           pendingBeat={pendingBeat}
+          presence={presence}
           theme={theme}
           onLengthChange={updateResponseLength}
           onPerspectiveChange={updateNarrationPerspective}
           onPacingChange={updatePacing}
           onBeat={queueDirectorBeat}
           onClearBeat={clearDirectorBeat}
+          onPresenceChange={updatePresence}
         />
 
         <ConversationPanel
@@ -2215,7 +2320,7 @@ export default function App() {
           suggestions={suggestions}
           inputError={inputError}
           theme={theme}
-          onTextChange={setTextInput}
+          onTextChange={(text) => { markActivity(); setTextInput(text); }}
           onImageAttach={setAttachedImage}
           onDismissError={() => setInputError(null)}
           onSend={sendTextMessage}

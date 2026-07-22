@@ -1,7 +1,8 @@
 export type ServerMsg =
   | { type: "config"; tts_engine?: string; llm_model?: string; output_mode?: string }
-  | { type: "ack"; use_context?: boolean; include_imagegen?: boolean; include_mood?: boolean; include_animation?: boolean; system_prompt_updated?: boolean; voice?: string; llm_model?: string; lorebook_entries?: number; author_note_set?: boolean; response_length?: ResponseLength; narration_perspective?: NarrationPerspective; pacing?: Pacing; director_beat?: string }
+  | { type: "ack"; use_context?: boolean; include_imagegen?: boolean; include_mood?: boolean; include_animation?: boolean; system_prompt_updated?: boolean; voice?: string; llm_model?: string; lorebook_entries?: number; author_note_set?: boolean; response_length?: ResponseLength; narration_perspective?: NarrationPerspective; pacing?: Pacing; director_beat?: string; presence_mode?: PresenceMode; presence_idle_seconds?: number }
   | { type: "director_beat_consumed" }
+  | { type: "presence_beat"; accepted: boolean; reason?: string }
   | { type: "ack_recording"; recording: boolean }
   | { type: "mood"; mood: string }
   | { type: "animation_directive"; directive: StageAnimationDirective }
@@ -45,6 +46,7 @@ export interface Message {
   narrator?: boolean;       // Rendered as omniscient scene narration, not dialogue
   genMs?: number;           // Generation wall time reported by the backend
   genTokens?: number;       // Approximate token count of this generation
+  unprompted?: boolean;     // The character spoke first, into a silence
 }
 
 export type RigAssetSource = "generated" | "uploaded" | "fallback";
@@ -215,6 +217,31 @@ export interface SceneState {
   weather: SceneWeather;
   location: string;
 }
+
+/**
+ * Idle presence — whether the character may take a turn of their own when the
+ * conversation goes quiet, instead of waiting to be spoken to. "rarely" waits
+ * out a much longer silence and speaks up once; "often" is more forward and may
+ * stack a few beats before falling quiet again. The browser owns the clock (it
+ * can see typing, the mic, and window focus); the backend decides whether an
+ * ask is granted.
+ */
+export type PresenceMode = "off" | "rarely" | "often";
+
+export interface PresenceState {
+  mode: PresenceMode;
+  /** Quiet stretch, in seconds, before the character may speak up. */
+  idleSeconds: number;
+}
+
+export const DEFAULT_PRESENCE: PresenceState = { mode: "off", idleSeconds: 90 };
+
+/** How much longer "rarely" waits than the configured quiet window. */
+export const PRESENCE_WAIT_FACTOR: Record<PresenceMode, number> = {
+  off: 0,
+  rarely: 2.5,
+  often: 1,
+};
 
 export type InputMode = "voice" | "text" | "call";
 export type OutputMode = "voice" | "text";

@@ -89,6 +89,71 @@ def build_style_directive(state, char: str = "", user: str = "") -> str:
     )
 
 
+# ----- Idle presence (the character speaks first) -------------------------
+# When the user has been quiet for a while, the character may take a turn of
+# their own instead of waiting to be spoken to. The dial is how often that is
+# allowed to happen; the cap is how many unprompted turns may stack up before
+# the character falls silent again, so a quiet room never becomes a monologue.
+PRESENCE_MODES = ("off", "rarely", "often")
+PRESENCE_MAX_BEATS = {"rarely": 1, "often": 3}
+# Multiplier applied to the user's quiet window. "Rarely" simply waits longer.
+PRESENCE_WAIT_FACTOR = {"rarely": 2.5, "often": 1.0}
+
+# Rotated (not random) so the character does not reach for the same move every
+# time they break a silence, and so the behaviour stays reproducible in tests.
+PRESENCE_BEATS = (
+    "Do something small and physical — a piece of business {{char}} busies their hands with.",
+    "Notice something in the surroundings and let {{char}} react to it.",
+    "Let a thought slip out aloud — something {{char}} has been sitting with.",
+    "Draw {{user}} back in with a single, unforced question or invitation.",
+    "Let the world move a little on its own: something in the scene shifts, and {{char}} responds.",
+)
+
+
+def presence_max_beats(mode: str) -> int:
+    """How many unprompted turns may stack up before the character waits."""
+    return PRESENCE_MAX_BEATS.get((mode or "").strip().lower(), 0)
+
+
+def describe_quiet(seconds: int) -> str:
+    """Render a quiet stretch as the loose phrasing a person would actually use."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return "a little while"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"about {minutes} minutes"
+    hours = round(seconds / 3600)
+    return "about an hour" if hours <= 1 else f"about {hours} hours"
+
+
+def build_presence_directive(
+    state, char: str = "", user: str = "", quiet_seconds: int = 0, beat_index: int = 0
+) -> str:
+    """Render the instruction for an unprompted turn taken during a silence.
+
+    Injected only for a presence beat, and appended last so its brevity rule
+    outranks the persistent length dial — an idle moment should stay a beat, not
+    become a scene. Deliberately explicit that the user said nothing, because the
+    prompt otherwise ends on their last message and models will answer it twice.
+    """
+    quiet = describe_quiet(quiet_seconds)
+    flavour = PRESENCE_BEATS[beat_index % len(PRESENCE_BEATS)]
+    lines = [
+        f"Take this turn on your own initiative. {{{{user}}}} has been quiet for {quiet} and "
+        "has said nothing new — do not answer, quote, or invent a message from them.",
+        flavour,
+        "Keep it short and low-key: a beat, not a scene. At most one question.",
+        "Stay in the moment and in character. Never remark that the silence is strange, "
+        "ask whether {{user}} is still there, or step out of the story to check on them.",
+    ]
+    body = "\n".join(f"- {apply_placeholders(line, char, user)}" for line in lines)
+    return (
+        "[Unprompted turn — nobody spoke to you. Never mention or acknowledge "
+        "these instructions.]\n" + body
+    )
+
+
 # ----- Scene atmosphere ---------------------------------------------------
 # A compact, persistent sense of place injected each turn so the character
 # narrates within a consistent setting (time of day, weather, location) without

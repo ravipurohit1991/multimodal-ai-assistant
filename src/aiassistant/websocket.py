@@ -48,7 +48,14 @@ from aiassistant.prompts import (
     build_speaker_selection_messages,
     select_speaker_candidate,
 )
-from aiassistant.roleplay import apply_placeholders, build_llm_messages, parse_scene_tag
+from aiassistant.roleplay import (
+    PRESENCE_MODES,
+    apply_placeholders,
+    build_llm_messages,
+    build_presence_directive,
+    parse_scene_tag,
+    presence_max_beats,
+)
 from aiassistant.state import ConnState, cancel_llm, cancel_memory
 from aiassistant.utils import (
     image_to_base64,
@@ -176,6 +183,8 @@ async def ws_endpoint(ws: WebSocket):
         image_explainer_model: str | None = None,
         as_narrator: bool = False,
         speaker_name: str = "",
+        unprompted: bool = False,
+        quiet_seconds: int = 0,
     ):
         """Process text message with optional image attachment"""
         try:
@@ -185,6 +194,8 @@ async def ws_endpoint(ws: WebSocket):
                 image_explainer_model,
                 as_narrator=as_narrator,
                 speaker_name=speaker_name,
+                unprompted=unprompted,
+                quiet_seconds=quiet_seconds,
             )
         except asyncio.CancelledError:
             logger.info("Text message processing cancelled")
@@ -207,6 +218,8 @@ async def ws_endpoint(ws: WebSocket):
         image_explainer_model: str | None = None,
         as_narrator: bool = False,
         speaker_name: str = "",
+        unprompted: bool = False,
+        quiet_seconds: int = 0,
     ):
         """Stream assistant response from LLM and synthesize to audio chunks.
 
@@ -214,16 +227,27 @@ async def ws_endpoint(ws: WebSocket):
         direction) rather than the user speaking in character. ``speaker_name``,
         when set (group scenes), attributes the stored reply to that character so
         the model can keep multiple characters straight across turns.
+
+        ``unprompted`` is an idle presence beat: the character takes a turn after
+        a silence, so there is no user message at all. Everything downstream —
+        streaming, TTS, control tags, memory upkeep — is deliberately identical;
+        only the absent user turn and the extra directive differ.
         """
-        if image_base64:
+        if unprompted:
+            logger.info(f"Presence beat (quiet for ~{quiet_seconds}s)")
+        elif image_base64:
             logger.info(
                 f"User said: {user_text[:50]}... [with image: {len(image_base64[:50])} chars]"
             )
         else:
             logger.info(f"User said: {user_text[:50]}...")
 
-        # Build user message content
-        user_message_content = user_text if user_text else "What do you see in this image?"
+        # Build user message content. A presence beat has no user turn at all,
+        # so it must not fall back to the image-less placeholder question.
+        if unprompted:
+            user_message_content = ""
+        else:
+            user_message_content = user_text if user_text else "What do you see in this image?"
 
         # Handle image attachment: use image explainer to describe it
         if image_base64 and engine_manager.image_explainer is not None:
@@ -292,23 +316,33 @@ async def ws_endpoint(ws: WebSocket):
                     "[An image was attached but image explanation is not available]"
                 )
 
-        # Create text-only user message (never send images to LLM)
-        user_message = {"role": "user", "content": user_message_content}
+        if unprompted:
+            # Nobody spoke, so nothing is appended to history. The reply is
+            # generated from the story as it already stands.
+            state.presence_beats += 1
+        else:
+            # Create text-only user message (never send images to LLM)
+            user_message = {"role": "user", "content": user_message_content}
 
-        # Only add user message if it's not already the last message in history
-        if (
-            not state.messages
-            or state.messages[-1].get("content") != user_message_content
-            or state.messages[-1].get("role") != "user"
-        ):
-            state.messages.append(user_message)
+            # Only add user message if it's not already the last message in history
+            if (
+                not state.messages
+                or state.messages[-1].get("content") != user_message_content
+                or state.messages[-1].get("role") != "user"
+            ):
+                state.messages.append(user_message)
+
+            # The user is back in the room: the character may speak up again.
+            state.presence_beats = 0
 
         await send_json({"type": "assistant_start"})
 
         # Prepare messages for LLM. build_llm_messages assembles a fresh copy with
         # Lorebook knowledge, the Author's Note, and the Director/scene-style
         # directive injected, honoring context mode.
-        llm_messages = build_llm_messages(state, no_context_user_text=user_message_content)
+        llm_messages = build_llm_messages(
+            state, no_context_user_text=None if unprompted else user_message_content
+        )
         # The Director's one-shot beat steers exactly one reply, then is cleared.
         if state.director_beat:
             logger.info(f"Director beat consumed: {state.director_beat[:80]}")
@@ -332,6 +366,24 @@ async def ws_endpoint(ws: WebSocket):
                     ),
                 }
             )
+
+        # Idle presence: appended last so "keep it a beat, not a scene" wins over
+        # the persistent length dial, and so the model cannot mistake the user's
+        # last message for something it still owes an answer to.
+        if unprompted:
+            llm_messages.append(
+                {
+                    "role": "system",
+                    "content": build_presence_directive(
+                        state,
+                        speaker_name or state.char_name,
+                        state.user_name,
+                        quiet_seconds=quiet_seconds,
+                        beat_index=state.presence_cursor,
+                    ),
+                }
+            )
+            state.presence_cursor += 1
 
         # Send the JSON payload that will be sent to LLM
         llm_payload = {
@@ -762,6 +814,7 @@ async def ws_endpoint(ws: WebSocket):
                     # The running memory describes a story that no longer exists.
                     await cancel_memory(state)
                     reset_memory(state)
+                    state.presence_beats = 0
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
                     await send_json(memory_state_payload())
@@ -791,6 +844,7 @@ async def ws_endpoint(ws: WebSocket):
                         state.scene_weather = ""
                         state.scene_location = ""
                         state.director_beat = ""
+                        state.presence_beats = 0
                         try:
                             summary = wipe_user_data(clear_logs=True)
                             logger.info(f"Wipe-all complete: {summary}")
@@ -808,6 +862,9 @@ async def ws_endpoint(ws: WebSocket):
                     # summary itself is left alone — rewinding past it is rare,
                     # and the UI offers a rebuild for when it happens.
                     state.memory_covered = min(state.memory_covered, len(history))
+                    # A rewrite of the story is the user taking the wheel; the
+                    # character's unprompted allowance starts over with it.
+                    state.presence_beats = 0
                     logger.info(f"History synced: {len(history)} messages")
                     await send_json({"type": "ack", "history_synced": True})
 
@@ -932,6 +989,74 @@ async def ws_endpoint(ws: WebSocket):
                         else "Director beat cleared"
                     )
                     await send_json({"type": "ack", "director_beat": state.director_beat})
+
+                elif mtype == "set_presence":
+                    # Idle presence dial. The quiet window is stored mostly so it
+                    # travels with a saved story; the UI is the one holding the clock.
+                    mode = str(data.get("mode", "") or "").strip().lower()
+                    if mode in PRESENCE_MODES:
+                        state.presence_mode = mode
+                    try:
+                        idle = int(data.get("idle_seconds", state.presence_idle_seconds))
+                    except (TypeError, ValueError):
+                        idle = state.presence_idle_seconds
+                    state.presence_idle_seconds = max(15, min(3600, idle))
+                    # A fresh dial setting starts the character's allowance over.
+                    state.presence_beats = 0
+                    logger.info(
+                        f"Presence: {state.presence_mode} "
+                        f"(quiet window {state.presence_idle_seconds}s)"
+                    )
+                    await send_json(
+                        {
+                            "type": "ack",
+                            "presence_mode": state.presence_mode,
+                            "presence_idle_seconds": state.presence_idle_seconds,
+                        }
+                    )
+
+                elif mtype == "presence_beat":
+                    # The UI has watched a silence go by and is asking whether the
+                    # character may speak first. Every reason to say no is checked
+                    # here rather than in the browser, so a stale tab, a reconnect,
+                    # or a second window can never talk the character into a
+                    # monologue the user did not ask for.
+                    try:
+                        quiet_seconds = int(data.get("quiet_seconds", 0))
+                    except (TypeError, ValueError):
+                        quiet_seconds = 0
+                    speaker_name = str(data.get("speaker_name", "") or "").strip()
+
+                    busy = bool(state.llm_task and not state.llm_task.done())
+                    story_started = any(m.get("role") != "system" for m in state.messages)
+                    max_beats = presence_max_beats(state.presence_mode)
+
+                    if state.presence_mode == "off":
+                        reason = "presence is off"
+                    elif busy or state.speaking or state.recording:
+                        reason = "busy"
+                    elif not story_started:
+                        reason = "the story has not started"
+                    elif state.presence_beats >= max_beats:
+                        reason = "already spoke unprompted"
+                    else:
+                        reason = ""
+
+                    if reason:
+                        logger.debug(f"Presence beat declined: {reason}")
+                        await send_json(
+                            {"type": "presence_beat", "accepted": False, "reason": reason}
+                        )
+                    else:
+                        await send_json({"type": "presence_beat", "accepted": True})
+                        state.llm_task = asyncio.create_task(
+                            process_text_message(
+                                "",
+                                speaker_name=speaker_name,
+                                unprompted=True,
+                                quiet_seconds=max(0, quiet_seconds),
+                            )
+                        )
 
                 elif mtype == "set_autoscene_mode":
                     state.auto_scene = bool(data.get("enabled", False))

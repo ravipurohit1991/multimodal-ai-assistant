@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Idle presence** — the character can speak first. When the room goes quiet, they may
+  take a turn of their own: a small piece of business, something noticed in the scene, a
+  thought said aloud, or a question back to you. A Presence dial in the Director bar
+  (off / rarely / often, plus the length of quiet to wait out) controls it, and it is off
+  by default. The browser holds the clock — it can see typing, the mic, an open modal, and
+  whether the window is even in front of you — while the backend decides whether the ask is
+  granted, counting beats so a silence never becomes a monologue. Unprompted turns are
+  marked "spoke first" in the transcript, the beat varies rather than repeating itself, and
+  the setting travels with a saved story.
 - **Story memory** — a rolling, model-written record of everything that scrolls out of the
   context window. Older turns are folded into a "story so far" block (`src/aiassistant/memory.py`)
   and replaced in the prompt, while recent exchanges still go out verbatim, so a long
