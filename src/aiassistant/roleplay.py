@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+from aiassistant.memory import build_memory_block, memory_cursor
 from aiassistant.prompts import build_final_reply_reminder
 
 # {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
@@ -314,10 +315,10 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
 def build_llm_messages(state, no_context_user_text: str | None = None) -> list[dict]:
     """Assemble the message list sent to the LLM for a normal turn.
 
-    Order: system prompt(s) → Lorebook knowledge → history (with the Author's
-    Note inserted a few turns from the end) → Director/scene-style directive →
-    final response-contract reminder. The returned list is always a fresh copy,
-    so ``state.messages`` stays clean.
+    Order: system prompt(s) → Story Memory → Lorebook knowledge → history (with
+    the Author's Note inserted a few turns from the end) → Director/scene-style
+    directive → final response-contract reminder. The returned list is always a
+    fresh copy, so ``state.messages`` stays clean.
     """
     char = getattr(state, "char_name", "") or ""
     user = getattr(state, "user_name", "") or ""
@@ -331,6 +332,17 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
         history = [{"role": "user", "content": no_context_user_text}]
     else:
         history = []
+
+    # Story Memory: everything the running record already covers is dropped from
+    # the prompt and represented by that one block instead, so a long story stays
+    # inside the model's context window. Only trims turns the summary accounts
+    # for, so a conversation with no memory yet is sent in full as always.
+    memory_block = build_memory_block(state)
+    memory_msgs: list[dict] = []
+    if memory_block:
+        memory_msgs = [{"role": "system", "content": memory_block}]
+        if state.use_context:
+            history = history[memory_cursor(state, len(history)) :]
 
     # Lorebook is scanned against the real recent history regardless of whether
     # full context is enabled, so keyword triggers still fire in single-turn mode.
@@ -360,7 +372,7 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
         insert_at = max(0, len(history) - depth)
         history = history[:insert_at] + [note_msg] + history[insert_at:]
 
-    messages = system_msgs + lore_msgs + scene_msgs + history
+    messages = system_msgs + memory_msgs + lore_msgs + scene_msgs + history
 
     # Director/scene-style directive is kept near the end for strong recency.
     style_block = build_style_directive(state, char, user)
@@ -376,6 +388,7 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
                 mood=bool(getattr(state, "include_mood", False)),
                 auto_scene=bool(getattr(state, "auto_scene", False)),
                 animation=bool(getattr(state, "include_animation", False)),
+                adult_mode=bool(getattr(state, "adult_mode", False)),
             ),
         }
     )

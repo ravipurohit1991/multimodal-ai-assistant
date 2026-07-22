@@ -9,7 +9,7 @@ import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
   IconStop, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
-  IconSparkles,
+  IconSparkles, IconBrain,
 } from "./Icons";
 
 interface ConversationPanelProps {
@@ -45,6 +45,9 @@ interface ConversationPanelProps {
   /** Current scene — drives the stage particle effects. */
   scene: SceneState;
   fxEnabled: boolean;
+  /** Story memory — how many older messages the model's record stands in for. */
+  memoryCovered: number;
+  memoryBusy: boolean;
   theme: Theme;
   onToggleImmersive: () => void;
   onToggleFormatting: (enabled: boolean) => void;
@@ -69,6 +72,7 @@ interface ConversationPanelProps {
   onPlayMessage: (text: string, index: number) => void;
   onEditingTextChange: (text: string) => void;
   onShowLorebook: () => void;
+  onShowMemory: () => void;
 }
 
 export function ConversationPanel({
@@ -101,6 +105,8 @@ export function ConversationPanel({
   immersive,
   scene,
   fxEnabled,
+  memoryCovered,
+  memoryBusy,
   theme,
   onToggleImmersive,
   onToggleFormatting,
@@ -124,7 +130,8 @@ export function ConversationPanel({
   onSwipe,
   onPlayMessage,
   onEditingTextChange,
-  onShowLorebook
+  onShowLorebook,
+  onShowMemory
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -268,6 +275,22 @@ export function ConversationPanel({
 
         <button className="icon-btn" onClick={onShowLorebook} title="Lorebook / world info">
           <IconBookOpen size={16} />
+        </button>
+        {/* Story memory — lit once the record is standing in for older messages,
+            so you can see at a glance that the story is being remembered. */}
+        <button
+          className="icon-btn"
+          data-active={memoryCovered > 0}
+          onClick={onShowMemory}
+          title={
+            memoryBusy
+              ? "Story memory — writing the story so far…"
+              : memoryCovered > 0
+                ? `Story memory — remembering ${memoryCovered} earlier ${memoryCovered === 1 ? "message" : "messages"}`
+                : "Story memory — long-term recall for a story that outgrows the context window"
+          }
+        >
+          <IconBrain size={16} className={memoryBusy ? "spin" : undefined} />
         </button>
         <button className="icon-btn" onClick={onShowSettings} title="Story & system (global prompt, scenario, author's note)">
           <IconSliders size={16} />

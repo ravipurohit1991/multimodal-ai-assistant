@@ -53,7 +53,10 @@ class ConnState:
     # Whether the character should emit a [mood: ...] tag each reply
     include_mood: bool = False
     # Whether the character should emit high-level [ANIM: ...] acting tags
-    include_animation: bool = True
+    include_animation: bool = False
+    # Adult mode: opt-in content for this session. Off until the UI asks
+    # for it, so a fresh connection is always the tamer default.
+    adult_mode: bool = False
 
     # ----- Director / scene-style controls -----
     # Persistent dials shaping every reply (see roleplay.build_style_directive)
@@ -74,6 +77,19 @@ class ConnState:
     # setting itself, and the backend applies them (see roleplay.parse_scene_tag).
     auto_scene: bool = False
 
+    # ----- Story Memory (rolling long-term summary) -----
+    # Older turns are folded into an LLM-written "story so far" and replaced in
+    # the prompt by that record, so a long roleplay keeps its continuity without
+    # resending (or silently losing) the whole transcript. Inert until the first
+    # summary exists, so short conversations behave exactly as before.
+    memory_enabled: bool = True
+    memory_auto: bool = True  # summarize on its own once the backlog is big enough
+    memory_summary: str = ""  # the running record, editable from the UI
+    memory_covered: int = 0  # how many user/assistant turns the record covers
+    memory_keep_recent: int = 12  # recent turns always sent verbatim
+    memory_trigger: int = 20  # backlog size that triggers an automatic pass
+    memory_task: asyncio.Task | None = None  # in-flight summarization, if any
+
 
 async def cancel_llm(state: ConnState):
     """Cancel ongoing LLM task"""
@@ -84,3 +100,18 @@ async def cancel_llm(state: ConnState):
         except asyncio.CancelledError:
             pass
     state.llm_task = None
+
+
+async def cancel_memory(state: ConnState):
+    """Cancel an in-flight Story Memory pass.
+
+    Kept separate from ``cancel_llm`` on purpose: interrupting the assistant
+    should never throw away a summary that is already halfway written.
+    """
+    if state.memory_task and not state.memory_task.done():
+        state.memory_task.cancel()
+        try:
+            await state.memory_task
+        except asyncio.CancelledError:
+            pass
+    state.memory_task = None

@@ -49,6 +49,7 @@ Here is the redesigned story workspace running with demo conversation data: loca
 - **Narrator beats** — drop in omniscient scene narration the characters react to, rendered as distinct scene lines
 - **Cinematic mode** — a one-click focused reading view with book typography (Literata) and a mood/scene-reactive backdrop
 - **Director controls** — steer length, perspective, pacing, and one-shot scene cues live, without editing prompts
+- **Story memory** — long stories outgrow a local model's context window, so the model keeps a rolling record of what already happened: older turns are folded into a "story so far" and sent as one compact block while recent exchanges still go out word for word. It maintains itself in the background, and you can read, correct, or rebuild the record at any time
 - **Story library** — park a whole story (chat, cast, lorebook, settings) on the backend and pick it up later; export any conversation as a Markdown story
 - Lorebook/World Info, Author's Note, moods, swipes, per-reply generation stats, and SillyTavern-compatible character cards
 
@@ -339,7 +340,6 @@ This is a long-term pipe dream, but with current AI models advancing rapidly, it
 
 - Support Docker
 - Group chat with autonomous turn-taking (multiple characters replying on their own)
-- Conversation memory and context management
 - Voice cloning for personalized TTS
 - Custom image generation styles and LoRA support
 - Export/import conversation history
