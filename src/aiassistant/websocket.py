@@ -25,6 +25,20 @@ from aiassistant.control_tags import (
 )
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
+from aiassistant.memory import (
+    MAX_KEEP_RECENT,
+    MAX_SUMMARY_CHARS,
+    MAX_TRIGGER,
+    MIN_KEEP_RECENT,
+    MIN_TRIGGER,
+    PASS_TIMEOUT_SECONDS,
+    conversation_messages,
+    memory_cursor,
+    pending_count,
+    reset_memory,
+    should_summarize,
+    summarize_story,
+)
 from aiassistant.prompts import (
     DEFAULT_ROLEPLAY_PROMPT,
     build_chat_system_prompt,
@@ -35,7 +49,7 @@ from aiassistant.prompts import (
     select_speaker_candidate,
 )
 from aiassistant.roleplay import apply_placeholders, build_llm_messages, parse_scene_tag
-from aiassistant.state import ConnState, cancel_llm
+from aiassistant.state import ConnState, cancel_llm, cancel_memory
 from aiassistant.utils import (
     image_to_base64,
     logger,
@@ -94,6 +108,67 @@ async def ws_endpoint(ws: WebSocket):
             "output_mode": state.output_mode,
         }
     )
+
+    def memory_state_payload(extra: dict | None = None) -> dict:
+        """The client's whole view of Story Memory, sent after every change."""
+        history = conversation_messages(state)
+        payload = {
+            "type": "memory_updated",
+            "summary": state.memory_summary,
+            "covered": memory_cursor(state, len(history)),
+            "total": len(history),
+            "pending": pending_count(state),
+            "enabled": state.memory_enabled,
+            "auto": state.memory_auto,
+            "keep_recent": state.memory_keep_recent,
+            "trigger": state.memory_trigger,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def run_memory_update(force: bool = False):
+        """One Story Memory pass, reported to the UI at both ends."""
+        try:
+            await send_json({"type": "memory_status", "busy": True})
+            result = await asyncio.wait_for(
+                summarize_story(state, force=force), timeout=PASS_TIMEOUT_SECONDS
+            )
+            if result is None:
+                await send_json(memory_state_payload({"unchanged": True}))
+                return
+            state.memory_summary, state.memory_covered = result
+            await send_json(memory_state_payload())
+        except asyncio.CancelledError:
+            logger.info("Story memory pass cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Story memory pass timed out after {PASS_TIMEOUT_SECONDS}s")
+            await send_json(memory_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Story memory pass failed: {e}")
+            await send_json(memory_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "memory_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
+    def schedule_memory_update(force: bool = False):
+        """Start a summarization pass in the background, at most one at a time.
+
+        Deliberately fire-and-forget and kept out of ``state.llm_task``: the user
+        should never wait on (or accidentally cancel) memory upkeep by sending
+        their next message.
+        """
+        if not state.memory_enabled:
+            return False
+        if state.memory_task and not state.memory_task.done():
+            return False
+        if not force and not (state.memory_auto and should_summarize(state)):
+            return False
+        state.memory_task = asyncio.create_task(run_memory_update(force))
+        return True
 
     async def process_text_message(
         user_text: str,
@@ -540,6 +615,11 @@ async def ws_endpoint(ws: WebSocket):
                 }
             )
             logger.info(f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)")
+
+            # Story Memory upkeep runs after the reply is already on screen, so
+            # the summarization pass never shows up as reply latency.
+            if schedule_memory_update():
+                logger.info(f"Story memory pass queued ({pending_count(state)} turns pending)")
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -592,6 +672,8 @@ async def ws_endpoint(ws: WebSocket):
             state.auto_scene = bool(data.get("auto_scene"))
         if "include_imagegen" in data:
             state.include_imagegen = bool(data.get("include_imagegen"))
+        if "adult_mode" in data:
+            state.adult_mode = bool(data.get("adult_mode"))
 
         # Extract character description if present (for image generation)
         # Look for ### Character Description section
@@ -610,6 +692,7 @@ async def ws_endpoint(ws: WebSocket):
             auto_scene=state.auto_scene,
             mood=state.include_mood,
             animation=state.include_animation,
+            adult_mode=state.adult_mode,
         )
 
         # Expand {{char}} / {{user}} macros now so the stored system prompt (and
@@ -624,7 +707,8 @@ async def ws_endpoint(ws: WebSocket):
             f"System prompt updated (engine: {state.tts_engine_type}, "
             f"animation={'on' if state.include_animation else 'off'}, "
             f"mood={'on' if state.include_mood else 'off'}, "
-            f"auto_scene={'on' if state.auto_scene else 'off'}): "
+            f"auto_scene={'on' if state.auto_scene else 'off'}, "
+            f"adult_mode={'on' if state.adult_mode else 'off'}): "
             f"{system_content[:150]}..."
         )
         await send_json({"type": "ack", "system_prompt_updated": True})
@@ -675,8 +759,12 @@ async def ws_endpoint(ws: WebSocket):
                 elif mtype == "clear_chat":
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
                     state.messages = system_msgs
+                    # The running memory describes a story that no longer exists.
+                    await cancel_memory(state)
+                    reset_memory(state)
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
+                    await send_json(memory_state_payload())
 
                 elif mtype == "wipe_all":
                     # Nuke everything: cancel any work, reset this connection's
@@ -693,6 +781,8 @@ async def ws_endpoint(ws: WebSocket):
                     else:
                         logger.info("Wipe-all requested — clearing conversation and on-disk data")
                         await cancel_llm(state)
+                        await cancel_memory(state)
+                        reset_memory(state)
                         state.speaking = False
                         state.messages = [m for m in state.messages if m["role"] == "system"]
                         state.lorebook = []
@@ -713,6 +803,11 @@ async def ws_endpoint(ws: WebSocket):
                     history = data.get("history", [])
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
                     state.messages = system_msgs + history
+                    # Edits, rewinds, and deletions move the ground under the
+                    # memory cursor; keep it inside the story it indexes. The
+                    # summary itself is left alone — rewinding past it is rare,
+                    # and the UI offers a rebuild for when it happens.
+                    state.memory_covered = min(state.memory_covered, len(history))
                     logger.info(f"History synced: {len(history)} messages")
                     await send_json({"type": "ack", "history_synced": True})
 
@@ -753,13 +848,52 @@ async def ws_endpoint(ws: WebSocket):
                     )
                     await send_json({"type": "ack", "author_note_set": True})
 
+                elif mtype == "set_memory":
+                    # Story Memory settings, plus the restored record when a saved
+                    # story (or a reconnecting browser) brings its own memory back.
+                    if "enabled" in data:
+                        state.memory_enabled = bool(data.get("enabled"))
+                    if "auto" in data:
+                        state.memory_auto = bool(data.get("auto"))
+                    keep = data.get("keep_recent")
+                    if isinstance(keep, int):
+                        state.memory_keep_recent = max(MIN_KEEP_RECENT, min(MAX_KEEP_RECENT, keep))
+                    trigger = data.get("trigger")
+                    if isinstance(trigger, int):
+                        state.memory_trigger = max(MIN_TRIGGER, min(MAX_TRIGGER, trigger))
+                    if "summary" in data:
+                        state.memory_summary = str(data.get("summary") or "")[:MAX_SUMMARY_CHARS]
+                    if isinstance(data.get("covered"), int):
+                        state.memory_covered = max(0, int(data["covered"]))
+                    logger.info(
+                        f"Story memory: {'on' if state.memory_enabled else 'off'}, "
+                        f"auto={'on' if state.memory_auto else 'off'}, "
+                        f"keep={state.memory_keep_recent}, trigger={state.memory_trigger}, "
+                        f"record={len(state.memory_summary)} chars covering "
+                        f"{state.memory_covered} messages"
+                    )
+                    await send_json(memory_state_payload())
+
+                elif mtype == "summarize_memory":
+                    # "Remember now" — an explicit pass, even below the threshold.
+                    if not state.memory_enabled:
+                        await send_json(memory_state_payload({"unchanged": True}))
+                    elif not schedule_memory_update(force=True):
+                        logger.info("Story memory pass already running; ignoring request")
+
+                elif mtype == "forget_memory":
+                    await cancel_memory(state)
+                    reset_memory(state)
+                    logger.info("Story memory cleared by user")
+                    await send_json(memory_state_payload())
+
                 elif mtype == "set_mood_mode":
                     state.include_mood = bool(data.get("enabled", False))
                     logger.info(f"Mood mode: {'enabled' if state.include_mood else 'disabled'}")
                     await send_json({"type": "ack", "include_mood": state.include_mood})
 
                 elif mtype == "set_animation_mode":
-                    state.include_animation = bool(data.get("enabled", True))
+                    state.include_animation = bool(data.get("enabled", False))
                     logger.info(
                         f"Animation mode: {'enabled' if state.include_animation else 'disabled'}"
                     )
@@ -1087,6 +1221,7 @@ async def ws_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
         await cancel_llm(state)
+        await cancel_memory(state)
         return
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
@@ -1094,4 +1229,5 @@ async def ws_endpoint(ws: WebSocket):
 
         traceback.print_exc()
         await cancel_llm(state)
+        await cancel_memory(state)
         return

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Story memory** — a rolling, model-written record of everything that scrolls out of the
+  context window. Older turns are folded into a "story so far" block (`src/aiassistant/memory.py`)
+  and replaced in the prompt, while recent exchanges still go out verbatim, so a long
+  roleplay keeps its continuity without resending the whole transcript. Runs itself in the
+  background after a reply, or on demand; the record is readable and editable from a new
+  Story memory modal, travels with saved stories, and survives a reconnect. Off-switch and
+  window/threshold dials included; a conversation with no memory yet is prompted exactly
+  as before.
 - **Story library** — save whole sessions (chat, cast, lorebook, settings) server-side under
   `user_data/sessions` and reopen them later from a new "Story library" modal
   (`GET/POST/DELETE /api/sessions`). File-based save/load still works.

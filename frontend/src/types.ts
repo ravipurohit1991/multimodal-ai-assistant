@@ -25,6 +25,8 @@ export type ServerMsg =
   | { type: "impersonation_end"; text: string }
   | { type: "suggestions"; items: string[] }
   | { type: "scene_updated"; time: string; weather: string; location: string }
+  | { type: "memory_updated"; summary: string; covered: number; total: number; pending: number; enabled: boolean; auto: boolean; keep_recent: number; trigger: number; unchanged?: boolean }
+  | { type: "memory_status"; busy: boolean }
   | { type: "wiped_all"; summary?: any }
   | { type: "error"; message: string };
 
@@ -169,6 +171,34 @@ export interface LorebookEntry {
   enabled: boolean;
   constant: boolean;  // Always inject, ignore keywords
 }
+
+/**
+ * Story Memory — the rolling record the model writes of everything that has
+ * scrolled out of its context window. `summary` is the record itself (editable);
+ * `covered` is how many messages it stands in for, and `pending` how many are
+ * waiting to be folded in.
+ */
+export interface MemoryState {
+  enabled: boolean;
+  auto: boolean;
+  summary: string;
+  covered: number;
+  total: number;
+  pending: number;
+  keepRecent: number;
+  trigger: number;
+}
+
+export const DEFAULT_MEMORY: MemoryState = {
+  enabled: true,
+  auto: true,
+  summary: "",
+  covered: 0,
+  total: 0,
+  pending: 0,
+  keepRecent: 12,
+  trigger: 20,
+};
 
 export interface VoiceInfo {
   name: string;

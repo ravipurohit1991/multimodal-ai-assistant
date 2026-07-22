@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -15,6 +15,7 @@ import { SceneBar } from "./components/SceneBar";
 import { CastBar } from "./components/CastBar";
 import { CharacterManager } from "./components/CharacterManager";
 import { LorebookModal } from "./components/LorebookModal";
+import { MemoryModal } from "./components/MemoryModal";
 import { SessionsModal } from "./components/SessionsModal";
 import { downloadJson, downloadText, readJsonFile } from "./io";
 import { getTheme, applyThemeToDocument } from "./theme";
@@ -174,9 +175,19 @@ export default function App() {
   const [authorNoteDepth, setAuthorNoteDepth] = useState<number>(
     typeof savedSettings.authorNoteDepth === "number" ? savedSettings.authorNoteDepth : 3
   );
+  // Story memory — the rolling record the model keeps of everything that has
+  // scrolled out of its context window. Persisted with the story so a reloaded
+  // (or reopened) conversation resumes with its long-term recall intact.
+  const [memory, setMemory] = useState<MemoryState>({
+    ...DEFAULT_MEMORY,
+    ...(savedSettings.memory as Partial<MemoryState> | undefined),
+  });
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
+  const [adultMode, setAdultMode] = useState<boolean>(savedSettings.adultMode === true);
   const [assistantMood, setAssistantMood] = useState("");
-  const [stageEnabled, setStageEnabled] = useState<boolean>(savedSettings.stageEnabled !== false);
+  const [stageEnabled, setStageEnabled] = useState<boolean>(savedSettings.stageEnabled === true);
   const [stageDirective, setStageDirective] = useState<StageAnimationDirective | null>(null);
   const swipeRegenRef = useRef<number | null>(null);
 
@@ -509,6 +520,23 @@ export default function App() {
             location: msg.location || "",
           });
         }
+        if (msg.type === "memory_updated") {
+          // The backend owns the record and the cursor; mirror its whole view so
+          // the two can never drift after an edit, rewind, or reconnect.
+          setMemory({
+            enabled: msg.enabled,
+            auto: msg.auto,
+            summary: msg.summary || "",
+            covered: msg.covered,
+            total: msg.total,
+            pending: msg.pending,
+            keepRecent: msg.keep_recent,
+            trigger: msg.trigger,
+          });
+        }
+        if (msg.type === "memory_status") {
+          setMemoryBusy(msg.busy);
+        }
         if (msg.type === "image_generating") {
           console.log(`🎨 Generating image: ${msg.prompt}`);
           setAssistantText(current => current + "\n[Generating image...]");
@@ -604,6 +632,7 @@ export default function App() {
       setIsStreaming(false);
       setStreamingText("");
       setIsSuggesting(false);
+      setMemoryBusy(false);
       wsRef.current = null;
     };
 
@@ -666,6 +695,7 @@ export default function App() {
     includeMood?: boolean;
     autoScene?: boolean;
     includeImageGen?: boolean;
+    adultMode?: boolean;
   } = {}) => {
     if (!wsRef.current) return;
     sendJson({
@@ -678,6 +708,7 @@ export default function App() {
       include_mood: overrides.includeMood ?? includeMood,
       auto_scene: overrides.autoScene ?? autoScene,
       include_imagegen: overrides.includeImageGen ?? includeImageGen,
+      adult_mode: overrides.adultMode ?? adultMode,
     });
   };
 
@@ -728,6 +759,7 @@ export default function App() {
         include_mood: includeMood,
         auto_scene: autoScene,
         include_imagegen: includeImageGen,
+        adult_mode: adultMode,
       });
     } else {
       pendingSpeakerRef.current = null;
@@ -1044,6 +1076,10 @@ export default function App() {
     setAssistantMood("");
     setStageDirective(null);
     setSuggestions([]);
+    // The backend forgets the story with the chat; mirror that locally so the
+    // record can't outlive the conversation it describes.
+    setMemory((prev) => ({ ...prev, summary: "", covered: 0, total: 0, pending: 0 }));
+    setMemoryBusy(false);
     pendingMoodRef.current = "";
     pendingAnimationRef.current = null;
   };
@@ -1120,6 +1156,38 @@ export default function App() {
     sendJson({ type: "set_author_note", note: authorNote, depth });
   };
 
+  // ----- Story memory -----
+  // Settings apply optimistically so the sliders stay responsive; the backend
+  // answers every change with its full view, which then becomes the truth.
+  const pushMemorySettings = (patch: Partial<MemoryState>) => {
+    const next = { ...memory, ...patch };
+    setMemory(next);
+    sendJson({
+      type: "set_memory",
+      enabled: next.enabled,
+      auto: next.auto,
+      keep_recent: next.keepRecent,
+      trigger: next.trigger,
+    });
+  };
+
+  // Hand-edits to the record stay local while the user types — the backend
+  // echoes back whatever it stores, and echoing mid-keystroke would fight the
+  // caret — then commit once on blur.
+  const editMemorySummary = (summary: string) => setMemory((prev) => ({ ...prev, summary }));
+  const commitMemorySummary = () => sendJson({ type: "set_memory", summary: memory.summary });
+
+  const summarizeMemoryNow = () => {
+    if (!wsRef.current || memoryBusy) return;
+    setMemoryBusy(true);
+    sendJson({ type: "summarize_memory" });
+  };
+
+  const forgetMemory = () => {
+    setMemory((prev) => ({ ...prev, summary: "", covered: 0, pending: prev.total }));
+    sendJson({ type: "forget_memory" });
+  };
+
   const toggleMood = (enabled: boolean) => {
     setIncludeMood(enabled);
     if (!enabled) setAssistantMood("");
@@ -1127,6 +1195,14 @@ export default function App() {
     // Rebuild the system prompt so the mood instruction is added/removed right away.
     // set_mood_mode is sent first, so the backend sees the new flag when it rebuilds.
     updateSystemPrompt({ includeMood: enabled });
+  };
+
+  // Adult mode lives entirely in the backend-owned prompt contract, so flipping
+  // it just rebuilds the system prompt for the current scene.
+  const toggleAdultMode = (enabled: boolean) => {
+    setAdultMode(enabled);
+    saveSettings({ adultMode: enabled });
+    updateSystemPrompt({ adultMode: enabled });
   };
 
   const toggleStage = (enabled: boolean) => {
@@ -1282,7 +1358,7 @@ export default function App() {
     conversationHistory,
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
-      authorNote, authorNoteDepth, includeMood, lorebook,
+      authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory,
       responseLength, narrationPerspective, pacing, scene, autoScene,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
@@ -1340,8 +1416,14 @@ export default function App() {
     if (typeof s.authorNote === "string") setAuthorNote(s.authorNote);
     if (typeof s.authorNoteDepth === "number") setAuthorNoteDepth(s.authorNoteDepth);
     if (typeof s.includeMood === "boolean") setIncludeMood(s.includeMood);
+    if (typeof s.adultMode === "boolean") setAdultMode(s.adultMode);
     if (typeof s.stageEnabled === "boolean") setStageEnabled(s.stageEnabled);
     if (Array.isArray(s.lorebook)) setLorebook(s.lorebook);
+    // A parked story carries its long-term memory with it, so reopening it
+    // resumes with everything the character had already learned.
+    const loadedMemory: MemoryState = { ...DEFAULT_MEMORY, ...(s.memory || {}) };
+    setMemory(loadedMemory);
+    setMemoryBusy(false);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
     if (s.pacing) setPacing(s.pacing as Pacing);
@@ -1384,7 +1466,7 @@ export default function App() {
     // Push everything to the backend now, using parsed values (state is async).
     if (wsRef.current) {
       sendJson({ type: "set_mood_mode", enabled: !!s.includeMood });
-      sendJson({ type: "set_animation_mode", enabled: s.stageEnabled !== false });
+      sendJson({ type: "set_animation_mode", enabled: s.stageEnabled === true });
       sendJson({ type: "set_autoscene_mode", enabled: s.autoScene !== false });
       sendJson({
         type: "set_system_prompt",
@@ -1398,10 +1480,11 @@ export default function App() {
         }),
         char: s.assistantName ?? assistantName,
         user: s.userName ?? userName,
-        include_animation: s.stageEnabled !== false,
+        include_animation: s.stageEnabled === true,
         include_mood: !!s.includeMood,
         auto_scene: s.autoScene !== false,
         include_imagegen: !!s.includeImageGen,
+        adult_mode: s.adultMode === true,
       });
       sendJson({ type: "set_context_mode", enabled: s.useContext !== false });
       sendJson({ type: "set_imagegen_mode", enabled: !!s.includeImageGen });
@@ -1428,6 +1511,18 @@ export default function App() {
       if (s.llmHost) sendJson({ type: "set_llm_host", host: s.llmHost });
       if (s.outputMode) sendJson({ type: "set_output_mode", mode: s.outputMode });
       syncHistoryToBackend(history);
+      // After the history, never before: the memory cursor is an index into the
+      // story being restored, and the backend clamps it against whatever history
+      // it currently holds.
+      sendJson({
+        type: "set_memory",
+        enabled: loadedMemory.enabled,
+        auto: loadedMemory.auto,
+        keep_recent: loadedMemory.keepRecent,
+        trigger: loadedMemory.trigger,
+        summary: loadedMemory.summary,
+        covered: loadedMemory.covered,
+      });
     }
   };
 
@@ -1820,9 +1915,11 @@ export default function App() {
       authorNote,
       authorNoteDepth,
       includeMood,
+      adultMode,
       stageEnabled,
       immersiveFormatting,
       lorebook,
+      memory,
       responseLength,
       narrationPerspective,
       pacing,
@@ -1843,7 +1940,7 @@ export default function App() {
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, stageEnabled, immersiveFormatting, lorebook, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -1892,6 +1989,17 @@ export default function App() {
       sendJson({ type: "set_imagegen_mode", enabled: includeImageGen });
       sendJson({ type: "set_lorebook", entries: serializeLorebook(lorebook) });
       sendJson({ type: "set_author_note", note: authorNote, depth: authorNoteDepth });
+      // Hand the backend the memory this browser was holding — a reconnect must
+      // not cost the story everything the character had already learned.
+      sendJson({
+        type: "set_memory",
+        enabled: memory.enabled,
+        auto: memory.auto,
+        keep_recent: memory.keepRecent,
+        trigger: memory.trigger,
+        summary: memory.summary,
+        covered: memory.covered,
+      });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
       if (llmModel) sendJson({ type: "set_llm_model", model: llmModel });
@@ -2042,6 +2150,8 @@ export default function App() {
           immersive={immersive}
           scene={scene}
           fxEnabled={fxEnabled}
+          memoryCovered={memory.enabled ? memory.covered : 0}
+          memoryBusy={memoryBusy}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -2074,6 +2184,7 @@ export default function App() {
           onPlayMessage={handlePlayAssistantMessage}
           onEditingTextChange={(text) => setEditingMessage(editingMessage ? { ...editingMessage, text } : null)}
           onShowLorebook={() => setShowLorebook(true)}
+          onShowMemory={() => setShowMemory(true)}
         />
 
         {/* Cast bar — who's in the scene / who speaks next */}
@@ -2149,6 +2260,7 @@ export default function App() {
         authorNote={authorNote}
         authorNoteDepth={authorNoteDepth}
         includeMood={includeMood}
+        adultMode={adultMode}
         connected={connected}
         theme={theme}
         onClose={() => setShowSettings(false)}
@@ -2157,6 +2269,7 @@ export default function App() {
         onAuthorNoteChange={updateAuthorNote}
         onAuthorNoteDepthChange={updateAuthorNoteDepth}
         onToggleMood={toggleMood}
+        onToggleAdultMode={toggleAdultMode}
         onUpdateSystemPrompt={updateSystemPrompt}
       />
 
@@ -2168,6 +2281,24 @@ export default function App() {
         theme={theme}
         onClose={() => setShowLorebook(false)}
         onChange={updateLorebook}
+      />
+
+      {/* Story memory — long-term recall once the chat outgrows the context window */}
+      <MemoryModal
+        show={showMemory}
+        memory={memory}
+        busy={memoryBusy}
+        connected={connected}
+        theme={theme}
+        onClose={() => setShowMemory(false)}
+        onToggleEnabled={(enabled) => pushMemorySettings({ enabled })}
+        onToggleAuto={(auto) => pushMemorySettings({ auto })}
+        onKeepRecentChange={(keepRecent) => pushMemorySettings({ keepRecent })}
+        onTriggerChange={(trigger) => pushMemorySettings({ trigger })}
+        onSummaryChange={editMemorySummary}
+        onSummaryCommit={commitMemorySummary}
+        onSummarizeNow={summarizeMemoryNow}
+        onForget={forgetMemory}
       />
 
       {/* Character roster / cast manager */}

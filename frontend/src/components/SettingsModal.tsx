@@ -9,6 +9,7 @@ interface SettingsModalProps {
   authorNote: string;
   authorNoteDepth: number;
   includeMood: boolean;
+  adultMode: boolean;
   connected: boolean;
   theme: Theme;
   onClose: () => void;
@@ -17,6 +18,7 @@ interface SettingsModalProps {
   onAuthorNoteChange: (note: string) => void;
   onAuthorNoteDepthChange: (depth: number) => void;
   onToggleMood: (enabled: boolean) => void;
+  onToggleAdultMode: (enabled: boolean) => void;
   onUpdateSystemPrompt: () => void;
 }
 
@@ -33,6 +35,7 @@ export function SettingsModal({
   authorNote,
   authorNoteDepth,
   includeMood,
+  adultMode,
   theme,
   connected,
   onClose,
@@ -41,6 +44,7 @@ export function SettingsModal({
   onAuthorNoteChange,
   onAuthorNoteDepthChange,
   onToggleMood,
+  onToggleAdultMode,
   onUpdateSystemPrompt
 }: SettingsModalProps) {
   if (!show) return null;
@@ -159,6 +163,43 @@ export function SettingsModal({
               The character reports its emotional state each reply, shown as a live badge and
               coloring the stage light.
             </div>
+          </div>
+
+          {/* Adult mode — opt-in explicit content for the whole scene. Kept as a
+              deliberate button rather than a checkbox so it never gets flipped
+              by accident, and applied immediately without needing Apply. */}
+          <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px solid ${theme.colors.border}` }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <Label>Adult mode (18+)</Label>
+                <div style={helpTextStyle}>
+                  Lets characters write unfiltered.
+                </div>
+              </div>
+              <button
+                className="btn"
+                onClick={() => onToggleAdultMode(!adultMode)}
+                disabled={!connected}
+                aria-pressed={adultMode}
+                title={adultMode ? "Turn adult mode off" : "Turn adult mode on for this scene"}
+                style={{
+                  flexShrink: 0,
+                  minWidth: 96,
+                  justifyContent: "center",
+                  fontWeight: 600,
+                  border: `1px solid ${adultMode ? theme.colors.warning : theme.colors.border}`,
+                  background: adultMode ? theme.colors.warningLight : "transparent",
+                  color: adultMode ? theme.colors.warning : theme.colors.textSecondary,
+                }}
+              >
+                {adultMode ? "On" : "Off"}
+              </button>
+            </div>
+            {adultMode && (
+              <div style={{ ...helpTextStyle, marginTop: 8, color: theme.colors.warning }}>
+                Adult mode is active for this scene. Local models vary interms of respecting it.
+              </div>
+            )}
           </div>
         </div>
 
