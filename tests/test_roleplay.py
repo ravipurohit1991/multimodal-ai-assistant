@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from aiassistant.roleplay import apply_placeholders, build_llm_messages
+from aiassistant.roleplay import (
+    PRESENCE_BEATS,
+    apply_placeholders,
+    build_llm_messages,
+    build_presence_directive,
+    describe_quiet,
+    presence_max_beats,
+)
 
 
 def make_state(**overrides):
@@ -69,3 +76,46 @@ def test_placeholder_names_are_literal_even_with_regex_replacement_syntax():
     result = apply_placeholders("{{char}} greets {{user}}", r"Captain \g<0>", r"User \1")
 
     assert result == r"Captain \g<0> greets User \1"
+
+
+def test_presence_directive_names_the_cast_and_forbids_answering_a_silence():
+    state = make_state()
+
+    directive = build_presence_directive(state, "Mira", "Alex", quiet_seconds=120)
+
+    assert "{{char}}" not in directive and "{{user}}" not in directive
+    assert "Alex has been quiet for about 2 minutes" in directive
+    # The prompt still ends on the user's last message, so the model must be told
+    # explicitly that there is nothing new to answer.
+    assert "do not answer, quote, or invent a message from them" in directive
+    # An idle beat must never turn into "are you still there?".
+    assert "still there" in directive
+
+
+def test_presence_beats_rotate_so_a_long_silence_does_not_repeat_itself():
+    state = make_state()
+
+    beats = [
+        build_presence_directive(state, "Mira", "Alex", beat_index=index)
+        for index in range(len(PRESENCE_BEATS) + 1)
+    ]
+
+    distinct = {beat for beat in beats}
+    assert len(distinct) == len(PRESENCE_BEATS)  # the cursor wraps cleanly
+    assert beats[0] == beats[len(PRESENCE_BEATS)]
+
+
+def test_quiet_stretches_are_described_the_way_a_person_would():
+    assert describe_quiet(0) == "a little while"
+    assert describe_quiet(45) == "a little while"
+    assert describe_quiet(120) == "about 2 minutes"
+    assert describe_quiet(3600) == "about an hour"
+    assert describe_quiet(10800) == "about 3 hours"
+
+
+def test_only_configured_presence_modes_allow_unprompted_turns():
+    assert presence_max_beats("off") == 0
+    assert presence_max_beats("") == 0
+    assert presence_max_beats("nonsense") == 0
+    assert presence_max_beats("rarely") == 1
+    assert presence_max_beats("OFTEN") == 3

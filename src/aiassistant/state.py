@@ -77,6 +77,16 @@ class ConnState:
     # setting itself, and the backend applies them (see roleplay.parse_scene_tag).
     auto_scene: bool = False
 
+    # ----- Idle presence (the character speaks first) -----
+    # When the user goes quiet, the character may take a turn unprompted instead
+    # of waiting to be spoken to. The UI owns the clock (it can see typing, mic
+    # and window focus) and asks; the backend owns whether the ask is granted.
+    # Off by default, so nothing ever speaks up uninvited unless asked to.
+    presence_mode: str = "off"  # off | rarely | often
+    presence_idle_seconds: int = 90  # quiet window before the UI nudges
+    presence_beats: int = 0  # unprompted turns taken since the user last spoke
+    presence_cursor: int = 0  # rotates the kind of beat, so they do not repeat
+
     # ----- Story Memory (rolling long-term summary) -----
     # Older turns are folded into an LLM-written "story so far" and replaced in
     # the prompt by that record, so a long roleplay keeps its continuity without

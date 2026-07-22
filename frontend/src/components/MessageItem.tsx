@@ -191,6 +191,15 @@ export function MessageItem({
               {moodToEmoji(message.mood)}
             </span>
           )}
+          {message.role === "assistant" && message.unprompted && (
+            <span
+              className="label-caps"
+              title={`${displayName} spoke first — nobody had said anything`}
+              style={{ color: theme.colors.textTertiary, letterSpacing: 0.4 }}
+            >
+              spoke first
+            </span>
+          )}
           <span className="meta-mono">
             {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
