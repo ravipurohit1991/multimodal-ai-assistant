@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+from aiassistant.continuity import build_canon_block
 from aiassistant.memory import build_memory_block, memory_cursor
 from aiassistant.prompts import build_final_reply_reminder
 
@@ -424,6 +425,12 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
     scene_block = build_scene_directive(state, char, user)
     scene_msgs = [{"role": "system", "content": scene_block}] if scene_block else []
 
+    # Story canon: the facts this story has already established, injected next to
+    # the world knowledge. This is the preventive half of the Continuity Guard —
+    # far cheaper than catching the contradiction after it has been written.
+    canon_block = apply_placeholders(build_canon_block(state), char, user)
+    canon_msgs = [{"role": "system", "content": canon_block}] if canon_block else []
+
     # Author's Note: a short, persistent steering instruction injected close to
     # the end of the history so it strongly influences the next response.
     note = (getattr(state, "author_note", "") or "").strip()
@@ -437,12 +444,19 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
         insert_at = max(0, len(history) - depth)
         history = history[:insert_at] + [note_msg] + history[insert_at:]
 
-    messages = system_msgs + memory_msgs + lore_msgs + scene_msgs + history
+    messages = system_msgs + memory_msgs + lore_msgs + scene_msgs + canon_msgs + history
 
     # Director/scene-style directive is kept near the end for strong recency.
     style_block = build_style_directive(state, char, user)
     if style_block:
         messages.append({"role": "system", "content": style_block})
+
+    # A continuity correction is armed for exactly one regeneration, and sits
+    # last of the steering blocks: the model has just proved that reading the
+    # canon once was not enough, so this one gets the strongest position.
+    note = (getattr(state, "continuity_note", "") or "").strip()
+    if note:
+        messages.append({"role": "system", "content": apply_placeholders(note, char, user)})
 
     # Reassert the small invariant contract after dynamic lore, author notes, and
     # director cues. This helps local models follow the rules even with long cards.

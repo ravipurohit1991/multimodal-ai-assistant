@@ -100,6 +100,20 @@ class ConnState:
     memory_trigger: int = 20  # backlog size that triggers an automatic pass
     memory_task: asyncio.Task | None = None  # in-flight summarization, if any
 
+    # ----- Continuity Guard (the story's canon) -----
+    # A ledger of durable facts the story has established. Injected into every
+    # turn so contradictions mostly never get written, and checked against each
+    # new reply so the ones that slip through are caught while they are still
+    # the latest message. Off by default: it costs one extra generation per
+    # reply, which on modest hardware is a real price to pay.
+    continuity_enabled: bool = False
+    continuity_auto: bool = True  # check every reply, rather than only on request
+    canon: list[dict] = field(default_factory=list)  # the ledger, editable from the UI
+    canon_covered: int = 0  # turns the ledger has been read against
+    continuity_alert: dict | None = None  # the unresolved contradiction, if any
+    continuity_note: str = ""  # one-shot correction armed for a reroll
+    continuity_task: asyncio.Task | None = None  # in-flight check, if any
+
 
 async def cancel_llm(state: ConnState):
     """Cancel ongoing LLM task"""
@@ -125,3 +139,19 @@ async def cancel_memory(state: ConnState):
         except asyncio.CancelledError:
             pass
     state.memory_task = None
+
+
+async def cancel_continuity(state: ConnState):
+    """Cancel an in-flight Continuity Guard pass.
+
+    Separate from the other two for the same reason: a user interrupting the
+    assistant, or a memory pass finishing, has nothing to do with a check that is
+    already reading the previous reply.
+    """
+    if state.continuity_task and not state.continuity_task.done():
+        state.continuity_task.cancel()
+        try:
+            await state.continuity_task
+        except asyncio.CancelledError:
+            pass
+    state.continuity_task = None

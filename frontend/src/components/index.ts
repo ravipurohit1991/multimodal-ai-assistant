@@ -8,6 +8,7 @@ export { SettingsModal } from "./SettingsModal";
 export { TextInputArea } from "./TextInputArea";
 export { LorebookModal } from "./LorebookModal";
 export { MemoryModal } from "./MemoryModal";
+export { CanonModal } from "./CanonModal";
 export { FormattedText } from "./FormattedText";
 export { StreamingBubble } from "./StreamingBubble";
 export { DirectorBar } from "./DirectorBar";

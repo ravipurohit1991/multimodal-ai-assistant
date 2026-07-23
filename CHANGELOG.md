@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Continuity guard** — the story keeps a canon, and every reply is held to it. A
+  ledger of durable facts (`src/aiassistant/continuity.py`) — eye colour, who holds the
+  key, who is dead, what was promised — is injected into every turn so contradictions
+  mostly never get written; each new reply is then read back against it in the
+  background, and a hard conflict is reported against the message that caused it, while
+  it is still the last thing said. Nothing is rewritten on its own: you choose between
+  writing the reply again (the correction steers one retry, the old take is kept as a
+  swipe), accepting the new version as canon, or leaving it. The ledger is model-written
+  and user-editable — pin a fact and it always reaches the model and is never revised
+  away — and it can be rebuilt from a whole transcript, so the guard can be adopted
+  forty turns into a story. Off by default, since checking costs one extra generation
+  per reply; the ledger travels with a saved story. Auxiliary passes now ask the model
+  not to deliberate (`stream_chat(..., think=False)`) — a reasoning model spent minutes
+  on a question worth a few tokens.
 - **Idle presence** — the character can speak first. When the room goes quiet, they may
   take a turn of their own: a small piece of business, something noticed in the scene, a
   thought said aloud, or a question back to you. A Presence dial in the Director bar

@@ -41,7 +41,7 @@ class OllamaClient(LLMEngine):
         self._last_model_info = {}
 
     async def stream_chat(
-        self, messages: list[dict[str, str]], model: str | None = None
+        self, messages: list[dict[str, str]], model: str | None = None, think: bool | None = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completions from Ollama API.
@@ -49,6 +49,12 @@ class OllamaClient(LLMEngine):
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             model: Model name (uses default if not specified)
+            think: Override the model's reasoning. ``False`` turns thinking off,
+                which matters for short structured side-tasks (JSON answers for
+                continuity checks and the like): a reasoning model can spend
+                minutes deliberating over a question worth a few tokens, and none
+                of that reasoning reaches the caller anyway. ``None`` leaves the
+                model's own default alone, which is what conversation wants.
 
         Yields:
             Text deltas from the model
@@ -61,6 +67,7 @@ class OllamaClient(LLMEngine):
         requested_model = model or self.default_model
         attempted_models: set[str] = set()
         candidate_models = [requested_model]
+        think_option = think
 
         while candidate_models:
             current_model = candidate_models.pop(0)
@@ -74,12 +81,30 @@ class OllamaClient(LLMEngine):
                 "stream": True,
                 "keep_alive": self.keep_alive,
             }
+            if think_option is not None:
+                payload["think"] = think_option
 
             try:
                 async with httpx.AsyncClient(timeout=None) as client:
                     async with client.stream("POST", url, headers=headers, json=payload) as r:
                         if r.is_error:
                             error_text = await self._extract_error_text(r)
+
+                            # A model with no reasoning to switch off rejects the
+                            # option outright. Nothing was asked for that it cannot
+                            # already do, so drop it and ask again.
+                            if think_option is not None and self._is_thinking_unsupported_error(
+                                r.status_code, error_text
+                            ):
+                                logger.debug(
+                                    f"LLM model '{current_model}' does not take a thinking "
+                                    f"option; retrying without it."
+                                )
+                                think_option = None
+                                attempted_models.discard(current_model)
+                                candidate_models.insert(0, current_model)
+                                continue
+
                             model_missing = self._is_model_not_found_error(
                                 r.status_code, error_text
                             )
@@ -144,6 +169,12 @@ class OllamaClient(LLMEngine):
             return raw_content.decode("utf-8", errors="replace").strip()
         except Exception:
             return raw_content.decode("utf-8", errors="replace").strip()
+
+    def _is_thinking_unsupported_error(self, status_code: int, error_text: str) -> bool:
+        """Return True when the server rejected the request over the thinking option."""
+        if status_code not in (400, 422):
+            return False
+        return "think" in (error_text or "").lower()
 
     def _is_model_not_found_error(self, status_code: int, error_text: str) -> bool:
         """Return True when response indicates requested model does not exist."""
