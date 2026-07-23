@@ -11,7 +11,7 @@ class LLMEngine(ABC):
 
     @abstractmethod
     async def stream_chat(
-        self, messages: list[dict[str, str]], model: str | None = None
+        self, messages: list[dict[str, str]], model: str | None = None, think: bool | None = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completions from the LLM.
@@ -19,6 +19,10 @@ class LLMEngine(ABC):
         Args:
             messages: List of message dictionaries with 'role' and 'content'
             model: Optional model name override
+            think: Optional override for a reasoning model's deliberation —
+                ``False`` for short structured side-tasks, ``None`` (the default)
+                to leave the model's own behaviour alone. Engines that have no
+                such notion may ignore it.
 
         Yields:
             Text deltas from the model

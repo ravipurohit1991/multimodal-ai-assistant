@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { Character, Message, RiggedCharacter, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
+import { Character, ContinuityReport, Message, RiggedCharacter, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
 import { MessageItem } from "./MessageItem";
 import { StreamingBubble } from "./StreamingBubble";
 import { RigStage } from "./RigStage";
@@ -9,7 +9,7 @@ import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
   IconStop, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
-  IconSparkles, IconBrain,
+  IconSparkles, IconBrain, IconShield,
 } from "./Icons";
 
 interface ConversationPanelProps {
@@ -48,6 +48,11 @@ interface ConversationPanelProps {
   /** Story memory — how many older messages the model's record stands in for. */
   memoryCovered: number;
   memoryBusy: boolean;
+  /** Continuity Guard — the canon's size, whether it is on, and any open conflict. */
+  canonSize: number;
+  continuityEnabled: boolean;
+  continuityBusy: boolean;
+  continuityReports: ContinuityReport[];
   theme: Theme;
   onToggleImmersive: () => void;
   onToggleFormatting: (enabled: boolean) => void;
@@ -73,6 +78,8 @@ interface ConversationPanelProps {
   onEditingTextChange: (text: string) => void;
   onShowLorebook: () => void;
   onShowMemory: () => void;
+  onShowCanon: () => void;
+  onResolveContinuity: (action: "reroll" | "accept" | "dismiss") => void;
 }
 
 export function ConversationPanel({
@@ -107,6 +114,10 @@ export function ConversationPanel({
   fxEnabled,
   memoryCovered,
   memoryBusy,
+  canonSize,
+  continuityEnabled,
+  continuityBusy,
+  continuityReports,
   theme,
   onToggleImmersive,
   onToggleFormatting,
@@ -131,7 +142,9 @@ export function ConversationPanel({
   onPlayMessage,
   onEditingTextChange,
   onShowLorebook,
-  onShowMemory
+  onShowMemory,
+  onShowCanon,
+  onResolveContinuity
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -292,6 +305,25 @@ export function ConversationPanel({
         >
           <IconBrain size={16} className={memoryBusy ? "spin" : undefined} />
         </button>
+        {/* Continuity Guard — quiet while the story holds together, and lit in
+            warning the moment a reply contradicts something it established. */}
+        <button
+          className="icon-btn"
+          data-active={continuityEnabled && continuityReports.length === 0}
+          onClick={onShowCanon}
+          title={
+            continuityReports.length > 0
+              ? "Continuity — the latest reply breaks something the story established"
+              : continuityBusy
+                ? "Continuity — checking the latest reply…"
+                : continuityEnabled
+                  ? `Story canon — holding the story to ${canonSize} established ${canonSize === 1 ? "fact" : "facts"}`
+                  : "Continuity guard — catch the story contradicting itself"
+          }
+          style={continuityReports.length > 0 ? { color: theme.colors.warning } : undefined}
+        >
+          <IconShield size={16} className={continuityBusy ? "spin" : undefined} />
+        </button>
         <button className="icon-btn" onClick={onShowSettings} title="Story & system (global prompt, scenario, author's note)">
           <IconSliders size={16} />
         </button>
@@ -408,7 +440,13 @@ export function ConversationPanel({
                 assistantCharacterImage={assistantCharacterImage}
                 formattingEnabled={formattingEnabled}
                 immersive={immersive}
+                continuityReports={
+                  idx === conversationHistory.length - 1 && msg.role === "assistant"
+                    ? continuityReports
+                    : undefined
+                }
                 theme={theme}
+                onResolveContinuity={onResolveContinuity}
                 onEdit={onEditMessage}
                 onSaveEdit={onSaveEdit}
                 onCancelEdit={onCancelEdit}

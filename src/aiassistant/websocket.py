@@ -14,6 +14,19 @@ from urllib.parse import urlparse
 from fastapi import WebSocket, WebSocketDisconnect
 
 from aiassistant.config import config
+from aiassistant.continuity import (
+    HARVEST_TIMEOUT_SECONDS,
+    REVIEW_TIMEOUT_SECONDS,
+    apply_revision,
+    build_continuity_note,
+    harvest_canon,
+    merge_facts,
+    new_fact,
+    normalize_facts,
+    rebuild_canon,
+    reset_canon,
+    review_reply,
+)
 from aiassistant.control_tags import (
     MOOD_TAG_RE,
     SCENE_TAG_RE,
@@ -56,7 +69,7 @@ from aiassistant.roleplay import (
     parse_scene_tag,
     presence_max_beats,
 )
-from aiassistant.state import ConnState, cancel_llm, cancel_memory
+from aiassistant.state import ConnState, cancel_continuity, cancel_llm, cancel_memory
 from aiassistant.utils import (
     image_to_base64,
     logger,
@@ -176,6 +189,111 @@ async def ws_endpoint(ws: WebSocket):
             return False
         state.memory_task = asyncio.create_task(run_memory_update(force))
         return True
+
+    def canon_state_payload(extra: dict | None = None) -> dict:
+        """The client's whole view of the Continuity Guard, sent after every change."""
+        payload = {
+            "type": "canon_updated",
+            "facts": state.canon,
+            "enabled": state.continuity_enabled,
+            "auto": state.continuity_auto,
+            "covered": state.canon_covered,
+            "total": len(conversation_messages(state)),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def run_continuity_check(reply_text: str):
+        """One check of the latest reply against the canon, reported to the UI.
+
+        Any contradiction is only ever *reported*. Nothing about the story is
+        rewritten here — the reply stays exactly as it arrived until the user
+        picks what to do about it.
+        """
+        try:
+            await send_json({"type": "continuity_status", "busy": True})
+            result = await asyncio.wait_for(
+                review_reply(state, reply_text), timeout=REVIEW_TIMEOUT_SECONDS
+            )
+            if result is None:
+                return
+
+            added = 0
+            if result["facts"]:
+                state.canon, added = merge_facts(state.canon, result["facts"])
+            state.canon_covered = len(conversation_messages(state))
+
+            contradictions = result["contradictions"]
+            if contradictions:
+                state.continuity_alert = {"items": contradictions}
+                logger.info(
+                    f"Continuity: {len(contradictions)} contradiction(s) in the latest reply"
+                )
+                await send_json({"type": "continuity_alert", "items": contradictions})
+            else:
+                state.continuity_alert = None
+            if added or contradictions:
+                await send_json(canon_state_payload())
+        except asyncio.CancelledError:
+            logger.info("Continuity check cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Continuity check timed out after {REVIEW_TIMEOUT_SECONDS}s")
+        except Exception as e:
+            logger.error(f"Continuity check failed: {e}")
+        finally:
+            try:
+                await send_json({"type": "continuity_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
+    def schedule_continuity_check(reply_text: str, force: bool = False) -> bool:
+        """Start a check in the background, at most one at a time.
+
+        Fire-and-forget and kept out of ``state.llm_task`` for the same reason
+        memory upkeep is: the user should never wait on — or accidentally cancel
+        — the guard by sending their next message.
+        """
+        if not state.continuity_enabled:
+            return False
+        if not force and not state.continuity_auto:
+            return False
+        if state.continuity_task and not state.continuity_task.done():
+            return False
+        if not reply_text.strip():
+            return False
+        state.continuity_task = asyncio.create_task(run_continuity_check(reply_text))
+        return True
+
+    async def run_canon_harvest():
+        """Read the whole story and fold what it established into the ledger."""
+        try:
+            await send_json({"type": "continuity_status", "busy": True})
+            facts = await asyncio.wait_for(harvest_canon(state), timeout=HARVEST_TIMEOUT_SECONDS)
+            if not facts:
+                await send_json(canon_state_payload({"unchanged": True}))
+                return
+            state.canon, added = rebuild_canon(state.canon, facts)
+            state.canon_covered = len(conversation_messages(state))
+            logger.info(
+                f"Canon rebuilt from the story: {added} fact(s) read, ledger now {len(state.canon)}"
+            )
+            await send_json(canon_state_payload({"added": added}))
+        except asyncio.CancelledError:
+            logger.info("Canon harvest cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Canon harvest timed out after {HARVEST_TIMEOUT_SECONDS}s")
+            await send_json(canon_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Canon harvest failed: {e}")
+            await send_json(canon_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "continuity_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
 
     async def process_text_message(
         user_text: str,
@@ -348,6 +466,11 @@ async def ws_endpoint(ws: WebSocket):
             logger.info(f"Director beat consumed: {state.director_beat[:80]}")
             state.director_beat = ""
             await send_json({"type": "director_beat_consumed"})
+        # A continuity correction steers exactly one retry, then is cleared —
+        # otherwise every later reply would keep apologising to a fixed problem.
+        if state.continuity_note:
+            logger.info("Continuity correction applied to this generation")
+            state.continuity_note = ""
 
         # Narrator turns: tell the model the latest message is omniscient stage
         # direction, not the user speaking, so it reacts rather than replying to it.
@@ -672,6 +795,12 @@ async def ws_endpoint(ws: WebSocket):
             # the summarization pass never shows up as reply latency.
             if schedule_memory_update():
                 logger.info(f"Story memory pass queued ({pending_count(state)} turns pending)")
+
+            # The Continuity Guard reads the reply the user is already looking at,
+            # for the same reason: a check the story waits on is a check nobody
+            # would leave switched on.
+            if schedule_continuity_check(stored_full):
+                logger.info("Continuity check queued for the latest reply")
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -811,13 +940,17 @@ async def ws_endpoint(ws: WebSocket):
                 elif mtype == "clear_chat":
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
                     state.messages = system_msgs
-                    # The running memory describes a story that no longer exists.
+                    # The running memory describes a story that no longer exists,
+                    # and so does everything the story had established.
                     await cancel_memory(state)
                     reset_memory(state)
+                    await cancel_continuity(state)
+                    reset_canon(state)
                     state.presence_beats = 0
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
                     await send_json(memory_state_payload())
+                    await send_json(canon_state_payload())
 
                 elif mtype == "wipe_all":
                     # Nuke everything: cancel any work, reset this connection's
@@ -836,6 +969,8 @@ async def ws_endpoint(ws: WebSocket):
                         await cancel_llm(state)
                         await cancel_memory(state)
                         reset_memory(state)
+                        await cancel_continuity(state)
+                        reset_canon(state)
                         state.speaking = False
                         state.messages = [m for m in state.messages if m["role"] == "system"]
                         state.lorebook = []
@@ -863,8 +998,12 @@ async def ws_endpoint(ws: WebSocket):
                     # and the UI offers a rebuild for when it happens.
                     state.memory_covered = min(state.memory_covered, len(history))
                     # A rewrite of the story is the user taking the wheel; the
-                    # character's unprompted allowance starts over with it.
+                    # character's unprompted allowance starts over with it, and a
+                    # contradiction reported against a line that may no longer be
+                    # there is retracted rather than left hanging over the story.
                     state.presence_beats = 0
+                    state.continuity_alert = None
+                    state.canon_covered = min(state.canon_covered, len(history))
                     logger.info(f"History synced: {len(history)} messages")
                     await send_json({"type": "ack", "history_synced": True})
 
@@ -943,6 +1082,104 @@ async def ws_endpoint(ws: WebSocket):
                     reset_memory(state)
                     logger.info("Story memory cleared by user")
                     await send_json(memory_state_payload())
+
+                elif mtype == "set_continuity":
+                    # Continuity Guard settings, plus the restored ledger when a
+                    # saved story (or a reconnecting browser) brings its canon back.
+                    if "enabled" in data:
+                        state.continuity_enabled = bool(data.get("enabled"))
+                        if not state.continuity_enabled:
+                            # Nothing half-flagged survives switching the guard off.
+                            await cancel_continuity(state)
+                            state.continuity_alert = None
+                            state.continuity_note = ""
+                    if "auto" in data:
+                        state.continuity_auto = bool(data.get("auto"))
+                    if "facts" in data:
+                        state.canon = normalize_facts(data.get("facts"))
+                    if isinstance(data.get("covered"), int):
+                        state.canon_covered = max(0, int(data["covered"]))
+                    logger.info(
+                        f"Continuity guard: {'on' if state.continuity_enabled else 'off'}, "
+                        f"auto={'on' if state.continuity_auto else 'off'}, "
+                        f"{len(state.canon)} fact(s) in canon"
+                    )
+                    await send_json(canon_state_payload())
+
+                elif mtype == "check_continuity":
+                    # "Check now" — read the latest reply against the canon even
+                    # when automatic checking is off.
+                    last_reply = next(
+                        (
+                            m.get("content", "")
+                            for m in reversed(state.messages)
+                            if m.get("role") == "assistant"
+                        ),
+                        "",
+                    )
+                    if not state.continuity_enabled:
+                        await send_json(canon_state_payload({"unchanged": True}))
+                    elif not schedule_continuity_check(last_reply, force=True):
+                        logger.info("Continuity check already running (or nothing to check)")
+
+                elif mtype == "harvest_canon":
+                    # "Read the story" — build the ledger from the whole transcript,
+                    # so the guard can be adopted forty turns in.
+                    if not state.continuity_enabled:
+                        await send_json(canon_state_payload({"unchanged": True}))
+                    elif state.continuity_task and not state.continuity_task.done():
+                        logger.info("Continuity pass already running; ignoring harvest request")
+                    else:
+                        state.continuity_task = asyncio.create_task(run_canon_harvest())
+
+                elif mtype == "set_canon":
+                    # The ledger edited by hand: a corrected line, a pin, a deletion.
+                    state.canon = normalize_facts(data.get("facts"))
+                    logger.info(f"Canon edited by user: {len(state.canon)} fact(s)")
+                    await send_json(canon_state_payload())
+
+                elif mtype == "add_canon_fact":
+                    text = str(data.get("text", "") or "").strip()
+                    if text:
+                        fact = new_fact(
+                            text,
+                            subject=str(data.get("subject", "") or ""),
+                            turn=len(conversation_messages(state)),
+                            pinned=bool(data.get("pinned", True)),
+                        )
+                        state.canon, _ = merge_facts(state.canon, [fact])
+                        logger.info(f"Canon fact added by user: {text[:80]}")
+                    await send_json(canon_state_payload())
+
+                elif mtype == "forget_canon":
+                    await cancel_continuity(state)
+                    reset_canon(state)
+                    logger.info("Canon cleared by user")
+                    await send_json(canon_state_payload())
+
+                elif mtype == "resolve_continuity":
+                    # What the user decided about a reported contradiction. The
+                    # guard reports; this is where the story actually changes.
+                    action = str(data.get("action", "") or "").strip().lower()
+                    alert = state.continuity_alert or {}
+                    items = alert.get("items", [])
+
+                    if action == "reroll":
+                        # Arm the correction; the UI then regenerates the reply as
+                        # an ordinary swipe, and the note is consumed by that turn.
+                        state.continuity_note = build_continuity_note(items)
+                    elif action == "accept":
+                        # The new passage wins: the facts it broke are rewritten
+                        # (or dropped, when the story simply retired them).
+                        for item in items:
+                            apply_revision(state, item.get("fact_id", ""), item.get("revised", ""))
+                        logger.info(
+                            f"Canon revised to match the latest reply ({len(items)} fact(s))"
+                        )
+                        await send_json(canon_state_payload())
+
+                    state.continuity_alert = None
+                    await send_json({"type": "continuity_resolved", "action": action or "dismiss"})
 
                 elif mtype == "set_mood_mode":
                     state.include_mood = bool(data.get("enabled", False))
@@ -1347,6 +1584,7 @@ async def ws_endpoint(ws: WebSocket):
         logger.info("WebSocket client disconnected")
         await cancel_llm(state)
         await cancel_memory(state)
+        await cancel_continuity(state)
         return
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
@@ -1355,4 +1593,5 @@ async def ws_endpoint(ws: WebSocket):
         traceback.print_exc()
         await cancel_llm(state)
         await cancel_memory(state)
+        await cancel_continuity(state)
         return

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -16,6 +16,7 @@ import { CastBar } from "./components/CastBar";
 import { CharacterManager } from "./components/CharacterManager";
 import { LorebookModal } from "./components/LorebookModal";
 import { MemoryModal } from "./components/MemoryModal";
+import { CanonModal } from "./components/CanonModal";
 import { SessionsModal } from "./components/SessionsModal";
 import { downloadJson, downloadText, readJsonFile } from "./io";
 import { getTheme, applyThemeToDocument } from "./theme";
@@ -184,6 +185,16 @@ export default function App() {
   });
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
+  // Continuity Guard — the canon this story has established, and any conflict the
+  // guard has found in the latest reply. The ledger travels with the story; the
+  // open conflict deliberately does not, since it is about one specific reply.
+  const [continuity, setContinuity] = useState<ContinuityState>({
+    ...DEFAULT_CONTINUITY,
+    ...(savedSettings.continuity as Partial<ContinuityState> | undefined),
+  });
+  const [continuityBusy, setContinuityBusy] = useState(false);
+  const [continuityReports, setContinuityReports] = useState<ContinuityReport[]>([]);
+  const [showCanon, setShowCanon] = useState(false);
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
   const [adultMode, setAdultMode] = useState<boolean>(savedSettings.adultMode === true);
   const [assistantMood, setAssistantMood] = useState("");
@@ -568,6 +579,25 @@ export default function App() {
         if (msg.type === "memory_status") {
           setMemoryBusy(msg.busy);
         }
+        if (msg.type === "canon_updated") {
+          // The backend owns the ledger; mirror its whole view so the two cannot
+          // drift after an edit, a harvest, or a reconnect.
+          setContinuity({
+            enabled: msg.enabled,
+            auto: msg.auto,
+            facts: msg.facts || [],
+            covered: msg.covered,
+          });
+        }
+        if (msg.type === "continuity_status") {
+          setContinuityBusy(msg.busy);
+        }
+        if (msg.type === "continuity_alert") {
+          setContinuityReports(msg.items || []);
+        }
+        if (msg.type === "continuity_resolved") {
+          setContinuityReports([]);
+        }
         if (msg.type === "image_generating") {
           console.log(`🎨 Generating image: ${msg.prompt}`);
           setAssistantText(current => current + "\n[Generating image...]");
@@ -668,6 +698,7 @@ export default function App() {
       setStreamingText("");
       setIsSuggesting(false);
       setMemoryBusy(false);
+      setContinuityBusy(false);
       wsRef.current = null;
     };
 
@@ -1117,6 +1148,10 @@ export default function App() {
     // record can't outlive the conversation it describes.
     setMemory((prev) => ({ ...prev, summary: "", covered: 0, total: 0, pending: 0 }));
     setMemoryBusy(false);
+    // The canon describes a story that is no longer on screen; it goes with it.
+    setContinuity((prev) => ({ ...prev, facts: [], covered: 0 }));
+    setContinuityReports([]);
+    setContinuityBusy(false);
     pendingMoodRef.current = "";
     pendingAnimationRef.current = null;
   };
@@ -1225,6 +1260,52 @@ export default function App() {
     sendJson({ type: "forget_memory" });
   };
 
+  // ----- Continuity guard -----
+  // Same shape as story memory: changes apply optimistically so the controls stay
+  // responsive, and the backend's answer becomes the truth a moment later.
+  const pushContinuitySettings = (patch: Partial<ContinuityState>) => {
+    const next = { ...continuity, ...patch };
+    setContinuity(next);
+    if (patch.enabled === false) setContinuityReports([]);
+    sendJson({
+      type: "set_continuity",
+      enabled: next.enabled,
+      auto: next.auto,
+      ...(patch.facts ? { facts: patch.facts } : {}),
+    });
+  };
+
+  const updateCanonFacts = (facts: CanonFact[]) => {
+    setContinuity((prev) => ({ ...prev, facts }));
+    sendJson({ type: "set_canon", facts });
+  };
+
+  const addCanonFact = (text: string) => sendJson({ type: "add_canon_fact", text, pinned: true });
+
+  const harvestCanon = () => {
+    if (!wsRef.current || continuityBusy) return;
+    setContinuityBusy(true);
+    sendJson({ type: "harvest_canon" });
+  };
+
+  const forgetCanon = () => {
+    setContinuity((prev) => ({ ...prev, facts: [], covered: 0 }));
+    setContinuityReports([]);
+    sendJson({ type: "forget_canon" });
+  };
+
+  // What the reader decided about a reported contradiction. "Write it again"
+  // arms the correction on the backend and then regenerates the reply through
+  // the ordinary swipe path, so the previous take is kept rather than lost.
+  const resolveContinuity = (action: "reroll" | "accept" | "dismiss") => {
+    sendJson({ type: "resolve_continuity", action });
+    setContinuityReports([]);
+    if (action === "reroll") {
+      const index = conversationHistory.length - 1;
+      if (conversationHistory[index]?.role === "assistant") generateSwipe(index);
+    }
+  };
+
   const toggleMood = (enabled: boolean) => {
     setIncludeMood(enabled);
     if (!enabled) setAssistantMood("");
@@ -1318,7 +1399,7 @@ export default function App() {
       // not even looking at — a beat nobody sees still costs a generation.
       if (isSendingMessage || isContinuing || isImpersonating || isStreaming) return;
       if (recording || inCall || expectingPresenceRef.current) return;
-      if (showSettings || showCharacterManager || showLorebook || showMemory || showSessions) return;
+      if (showSettings || showCharacterManager || showLorebook || showMemory || showCanon || showSessions) return;
       if (conversationHistory.length === 0) return;
       if (document.visibilityState !== "visible") return;
 
@@ -1448,7 +1529,7 @@ export default function App() {
     conversationHistory,
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
-      authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory,
+      authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory, continuity,
       responseLength, narrationPerspective, pacing, scene, autoScene, presence,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
@@ -1514,6 +1595,12 @@ export default function App() {
     const loadedMemory: MemoryState = { ...DEFAULT_MEMORY, ...(s.memory || {}) };
     setMemory(loadedMemory);
     setMemoryBusy(false);
+    // …and everything it had established, so a reopened story is still held to
+    // the same facts it was written under.
+    const loadedContinuity: ContinuityState = { ...DEFAULT_CONTINUITY, ...(s.continuity || {}) };
+    setContinuity(loadedContinuity);
+    setContinuityReports([]);
+    setContinuityBusy(false);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
     if (s.pacing) setPacing(s.pacing as Pacing);
@@ -1621,6 +1708,13 @@ export default function App() {
         trigger: loadedMemory.trigger,
         summary: loadedMemory.summary,
         covered: loadedMemory.covered,
+      });
+      sendJson({
+        type: "set_continuity",
+        enabled: loadedContinuity.enabled,
+        auto: loadedContinuity.auto,
+        facts: loadedContinuity.facts,
+        covered: loadedContinuity.covered,
       });
     }
   };
@@ -2020,6 +2114,7 @@ export default function App() {
       immersiveFormatting,
       lorebook,
       memory,
+      continuity,
       responseLength,
       narrationPerspective,
       pacing,
@@ -2040,7 +2135,7 @@ export default function App() {
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -2099,6 +2194,15 @@ export default function App() {
         trigger: memory.trigger,
         summary: memory.summary,
         covered: memory.covered,
+      });
+      // The canon travels the same way: a reconnect must not quietly stop the
+      // story being held to what it already established.
+      sendJson({
+        type: "set_continuity",
+        enabled: continuity.enabled,
+        auto: continuity.auto,
+        facts: continuity.facts,
+        covered: continuity.covered,
       });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
@@ -2257,6 +2361,10 @@ export default function App() {
           fxEnabled={fxEnabled}
           memoryCovered={memory.enabled ? memory.covered : 0}
           memoryBusy={memoryBusy}
+          canonSize={continuity.facts.length}
+          continuityEnabled={continuity.enabled}
+          continuityBusy={continuityBusy}
+          continuityReports={continuity.enabled ? continuityReports : []}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -2290,6 +2398,8 @@ export default function App() {
           onEditingTextChange={(text) => setEditingMessage(editingMessage ? { ...editingMessage, text } : null)}
           onShowLorebook={() => setShowLorebook(true)}
           onShowMemory={() => setShowMemory(true)}
+          onShowCanon={() => setShowCanon(true)}
+          onResolveContinuity={resolveContinuity}
         />
 
         {/* Cast bar — who's in the scene / who speaks next */}
@@ -2404,6 +2514,22 @@ export default function App() {
         onSummaryCommit={commitMemorySummary}
         onSummarizeNow={summarizeMemoryNow}
         onForget={forgetMemory}
+      />
+
+      {/* Story canon — the facts the continuity guard holds every reply to */}
+      <CanonModal
+        show={showCanon}
+        continuity={continuity}
+        busy={continuityBusy}
+        connected={connected}
+        theme={theme}
+        onClose={() => setShowCanon(false)}
+        onToggleEnabled={(enabled) => pushContinuitySettings({ enabled })}
+        onToggleAuto={(auto) => pushContinuitySettings({ auto })}
+        onFactsChange={updateCanonFacts}
+        onAddFact={addCanonFact}
+        onHarvest={harvestCanon}
+        onForget={forgetCanon}
       />
 
       {/* Character roster / cast manager */}

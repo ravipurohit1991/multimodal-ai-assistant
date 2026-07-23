@@ -28,6 +28,10 @@ export type ServerMsg =
   | { type: "scene_updated"; time: string; weather: string; location: string }
   | { type: "memory_updated"; summary: string; covered: number; total: number; pending: number; enabled: boolean; auto: boolean; keep_recent: number; trigger: number; unchanged?: boolean }
   | { type: "memory_status"; busy: boolean }
+  | { type: "canon_updated"; facts: CanonFact[]; enabled: boolean; auto: boolean; covered: number; total: number; added?: number; unchanged?: boolean }
+  | { type: "continuity_status"; busy: boolean }
+  | { type: "continuity_alert"; items: ContinuityReport[] }
+  | { type: "continuity_resolved"; action: string }
   | { type: "wiped_all"; summary?: any }
   | { type: "error"; message: string };
 
@@ -200,6 +204,50 @@ export const DEFAULT_MEMORY: MemoryState = {
   pending: 0,
   keepRecent: 12,
   trigger: 20,
+};
+
+/**
+ * Continuity Guard — the story's canon and the check that guards it.
+ *
+ * A `CanonFact` is one durable detail the story established: an eye colour, who
+ * holds the key, who is dead, what was promised. The ledger is injected into
+ * every turn so contradictions mostly never get written, and each new reply is
+ * read back against it so the ones that slip through are caught while they are
+ * still the latest message. `pinned` marks a fact as yours — never auto-revised,
+ * never evicted when the ledger fills up.
+ */
+export interface CanonFact {
+  id: string;
+  subject: string;
+  text: string;
+  turn: number;
+  pinned: boolean;
+}
+
+/** One reported conflict between the latest reply and an established fact. */
+export interface ContinuityReport {
+  fact_id: string;
+  /** The canon line as it stands, rendered for display. */
+  fact: string;
+  /** The words in the reply that broke it. */
+  quote: string;
+  why: string;
+  /** What the fact would become if the new reply is accepted as true. */
+  revised: string;
+}
+
+export interface ContinuityState {
+  enabled: boolean;
+  auto: boolean;
+  facts: CanonFact[];
+  covered: number;
+}
+
+export const DEFAULT_CONTINUITY: ContinuityState = {
+  enabled: false,
+  auto: true,
+  facts: [],
+  covered: 0,
 };
 
 export interface VoiceInfo {

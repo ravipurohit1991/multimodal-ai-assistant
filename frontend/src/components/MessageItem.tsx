@@ -1,10 +1,11 @@
-import { Message } from "../types";
+import { ContinuityReport, Message } from "../types";
 import { Theme } from "../theme";
 import { FormattedText } from "./FormattedText";
 import { moodToEmoji, moodToColor } from "../mood";
 import {
   IconVolume, IconStop, IconPencil, IconTrash, IconRewind, IconRefresh,
   IconSend, IconChevronLeft, IconChevronRight, IconPlus, IconCheck, IconX,
+  IconAlert, IconShield,
 } from "./Icons";
 
 interface MessageItemProps {
@@ -20,7 +21,10 @@ interface MessageItemProps {
   assistantCharacterImage: string | null;
   formattingEnabled: boolean;
   immersive?: boolean;
+  /** Continuity conflicts reported against this reply, if any are unresolved. */
+  continuityReports?: ContinuityReport[];
   theme: Theme;
+  onResolveContinuity?: (action: "reroll" | "accept" | "dismiss") => void;
   onEdit: (index: number) => void;
   onSaveEdit: (index: number) => void;
   onCancelEdit: () => void;
@@ -90,7 +94,9 @@ export function MessageItem({
   assistantCharacterImage,
   formattingEnabled,
   immersive = false,
+  continuityReports,
   theme,
+  onResolveContinuity,
   onEdit,
   onSaveEdit,
   onCancelEdit,
@@ -149,6 +155,9 @@ export function MessageItem({
   const swipeIndex = message.swipeIndex ?? swipes.length - 1;
   const showSwipes = message.role === "assistant" && isLast;
   const stats = message.role === "assistant" ? genStats(message) : "";
+  // A continuity conflict is shown against the reply that caused it, while that
+  // reply is still the last thing said and cheap to take back.
+  const flagged = (continuityReports?.length ?? 0) > 0;
 
   return (
     <div
@@ -250,7 +259,9 @@ export function MessageItem({
               // Tint the assistant bubble's edge with the mood it was delivered in
               ...(message.role === "assistant" && message.mood
                 ? { borderLeft: `2px solid ${moodToColor(message.mood)}` }
-                : {})
+                : {}),
+              // …unless the guard has something to say about it, which outranks mood.
+              ...(flagged ? { borderLeft: `2px solid ${theme.colors.warning}` } : {})
             }}>
               {/* Display user-attached image at the top if present */}
               {isUser && message.image && (
@@ -301,6 +312,78 @@ export function MessageItem({
                 </div>
               )}
             </div>
+
+            {/* Continuity Guard — the story just contradicted itself, and this is
+                the moment it is cheapest to fix. Nothing has been changed yet;
+                all three ways out are the reader's to choose. */}
+            {flagged && (
+              <div className="fade-up" style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 11,
+                background: `color-mix(in srgb, ${theme.colors.warning} 9%, ${theme.colors.surface})`,
+                border: `1px solid color-mix(in srgb, ${theme.colors.warning} 40%, transparent)`,
+                fontFamily: theme.fonts.ui,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+                  <IconAlert size={13} style={{ color: theme.colors.warning }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.colors.textPrimary }}>
+                    {continuityReports!.length === 1
+                      ? "This breaks something the story established"
+                      : `This breaks ${continuityReports!.length} things the story established`}
+                  </span>
+                </div>
+
+                {continuityReports!.map((report) => (
+                  <div key={report.fact_id} style={{ marginBottom: 7, fontSize: 12.5, lineHeight: 1.55 }}>
+                    <div style={{ color: theme.colors.textSecondary }}>
+                      <span style={{ color: theme.colors.textTertiary }}>Canon: </span>
+                      {report.fact}
+                    </div>
+                    {report.quote && (
+                      <div style={{
+                        color: theme.colors.textSecondary,
+                        fontFamily: theme.fonts.prose,
+                        fontStyle: "italic",
+                      }}>
+                        <span style={{ color: theme.colors.textTertiary, fontStyle: "normal", fontFamily: theme.fonts.ui }}>
+                          This reply:{" "}
+                        </span>
+                        “{report.quote}”
+                      </div>
+                    )}
+                    <div style={{ color: theme.colors.textTertiary, fontSize: 11.5 }}>{report.why}</div>
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 9 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onResolveContinuity?.("reroll")}
+                    title="Write this reply again, without the conflict"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconRefresh size={13} /> Write it again
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveContinuity?.("accept")}
+                    title="Take the new version as true and update the canon"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconShield size={13} /> This is the truth now
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveContinuity?.("dismiss")}
+                    title="Leave the story exactly as it is"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconX size={13} /> Leave it
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Swipes + actions on one quiet row, revealed on hover */}
             <div style={{
