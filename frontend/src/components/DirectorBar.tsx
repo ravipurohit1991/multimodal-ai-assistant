@@ -202,7 +202,7 @@ export function DirectorBar({
             <Field label="Length">
               <Segmented value={responseLength} options={LENGTHS} onChange={onLengthChange} />
             </Field>
-            <Field label="Voice">
+            <Field label="Point of view">
               <Segmented value={narrationPerspective} options={PERSPECTIVES} onChange={onPerspectiveChange} />
             </Field>
             <Field label="Pacing">
@@ -212,7 +212,7 @@ export function DirectorBar({
 
           {/* Idle presence — whether the character fills a silence on their own */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
-            <Field label="Presence">
+            <Field label="Initiative">
               <Segmented
                 value={presence.mode}
                 options={PRESENCES}
@@ -220,7 +220,7 @@ export function DirectorBar({
               />
             </Field>
             {presence.mode !== "off" && (
-              <Field label="After">
+              <Field label="Speaks after">
                 <select
                   className="input"
                   disabled={!connected}
@@ -246,7 +246,7 @@ export function DirectorBar({
 
           {/* One-shot scene beats */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            <span className="label-caps">Beats</span>
+            <span className="label-caps">Next-reply cue</span>
             {BEATS.map((b) => (
               <button
                 key={b.label}

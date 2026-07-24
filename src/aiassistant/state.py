@@ -3,7 +3,7 @@ Connection State Management - Tracks WebSocket connection state and conversation
 """
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from aiassistant.config import config
 from aiassistant.prompts import DEFAULT_ROLEPLAY_PROMPT, build_chat_system_prompt
@@ -114,6 +114,22 @@ class ConnState:
     continuity_note: str = ""  # one-shot correction armed for a reroll
     continuity_task: asyncio.Task | None = None  # in-flight check, if any
 
+    # ----- Story Threads (unresolved narrative matters) -----
+    # This ledger is deliberately separate from canon: canon says what is true,
+    # while threads say what remains dramatically open. The tracker runs after a
+    # reply and never delays the visible response.
+    story_threads_enabled: bool = True
+    story_threads_auto: bool = True
+    story_threads: list[dict] = field(default_factory=list)
+    story_threads_covered: int = 0
+    story_threads_task: asyncio.Task | None = None
+
+    # Local models generally serialize work internally and can run out of memory
+    # when several auxiliary passes arrive together. WebSocket orchestration uses
+    # this per-connection lock to serialize memory, continuity, and thread upkeep
+    # without blocking the foreground reply stream.
+    auxiliary_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
 
 async def cancel_llm(state: ConnState):
     """Cancel ongoing LLM task"""
@@ -155,3 +171,35 @@ async def cancel_continuity(state: ConnState):
         except asyncio.CancelledError:
             pass
     state.continuity_task = None
+
+
+async def cancel_story_threads(state: ConnState):
+    """Cancel an in-flight Story Threads pass without touching other work."""
+    if state.story_threads_task and not state.story_threads_task.done():
+        state.story_threads_task.cancel()
+        try:
+            await state.story_threads_task
+        except asyncio.CancelledError:
+            pass
+    state.story_threads_task = None
+
+
+async def wipe_connection_state(state: ConnState) -> None:
+    """Return every per-connection field to the same state as a fresh socket.
+
+    Wipe used to maintain a hand-written list of whichever features existed when
+    it was added. Newer fields consequently survived until the browser happened
+    to reconnect. Replacing every dataclass field from a fresh ``ConnState``
+    makes the contract future-proof: adding a field automatically adds it to the
+    wipe, while preserving the state object's identity captured by WebSocket
+    helper closures.
+    """
+
+    await cancel_llm(state)
+    await cancel_memory(state)
+    await cancel_continuity(state)
+    await cancel_story_threads(state)
+
+    fresh = ConnState()
+    for state_field in fields(ConnState):
+        setattr(state, state_field.name, getattr(fresh, state_field.name))

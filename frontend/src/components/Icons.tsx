@@ -87,5 +87,8 @@ export const IconMoreH = make(<><circle cx="12" cy="12" r="1" /><circle cx="19" 
 export const IconItalic = make(<><path d="M19 4h-9" /><path d="M14 20H5" /><path d="M15 4 9 20" /></>);
 export const IconBrain = make(<><path d="M9.5 3a2.5 2.5 0 0 0-2.4 1.8A2.5 2.5 0 0 0 5 7.2a2.5 2.5 0 0 0-.6 4.3A2.5 2.5 0 0 0 5 16a2.5 2.5 0 0 0 2.2 2.7A2.5 2.5 0 0 0 12 18V5.5A2.5 2.5 0 0 0 9.5 3Z" /><path d="M14.5 3A2.5 2.5 0 0 1 17 5.5V18a2.5 2.5 0 0 1-4.8.7" /><path d="M17 4.8a2.5 2.5 0 0 1 2.1 2.4 2.5 2.5 0 0 1 .6 4.3A2.5 2.5 0 0 1 19 16a2.5 2.5 0 0 1-2.2 2.7" /></>);
 export const IconShield = make(<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="m9 12 2 2 4-4" /></>);
+export const IconThreads = make(<><circle cx="6" cy="5" r="2.5" /><circle cx="18" cy="8" r="2.5" /><circle cx="8" cy="19" r="2.5" /><path d="M8.4 5.6 15.6 7.4" /><path d="m7 7.3.7 9.2" /><path d="m10.1 17.8 5.9-7.6" /></>);
 export const IconPin = make(<><path d="M12 17v5" /><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z" /></>);
+export const IconSearch = make(<><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>);
+export const IconBookmark = make(<path d="M6 3h12a1 1 0 0 1 1 1v18l-7-4-7 4V4a1 1 0 0 1 1-1Z" />);
 export const IconDice = make(<><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1" fill="currentColor" /><circle cx="15.5" cy="8.5" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="8.5" cy="15.5" r="1" fill="currentColor" /><circle cx="15.5" cy="15.5" r="1" fill="currentColor" /></>);

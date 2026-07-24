@@ -15,6 +15,7 @@ import re
 from aiassistant.continuity import build_canon_block
 from aiassistant.memory import build_memory_block, memory_cursor
 from aiassistant.prompts import build_final_reply_reminder
+from aiassistant.story_threads import build_story_threads_block
 
 # {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
 # tolerant of inner whitespace, e.g. "{{ Char }}".
@@ -381,10 +382,11 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
 def build_llm_messages(state, no_context_user_text: str | None = None) -> list[dict]:
     """Assemble the message list sent to the LLM for a normal turn.
 
-    Order: system prompt(s) → Story Memory → Lorebook knowledge → history (with
-    the Author's Note inserted a few turns from the end) → Director/scene-style
-    directive → final response-contract reminder. The returned list is always a
-    fresh copy, so ``state.messages`` stays clean.
+    Order: system prompt(s) → Story Memory → Lorebook knowledge → scene → canon
+    → open Story Threads → history (with the Author's Note inserted a few turns
+    from the end) → Director/scene-style directive → final response-contract
+    reminder. The returned list is always a fresh copy, so ``state.messages``
+    stays clean.
     """
     char = getattr(state, "char_name", "") or ""
     user = getattr(state, "user_name", "") or ""
@@ -431,6 +433,15 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
     canon_block = apply_placeholders(build_canon_block(state), char, user)
     canon_msgs = [{"role": "system", "content": canon_block}] if canon_block else []
 
+    # Open threads are not canon: they are unresolved matters that may pay off,
+    # not facts or mandatory plot beats. Keep the block before the conversation
+    # so the latest user turn has stronger recency and remains in control.
+    # This block is already JSON-escaped. Replacing macros afterwards could let
+    # quotes/newlines in a display name corrupt that boundary, so thread text
+    # remains literal here (automatic threads already contain the actual names).
+    threads_block = build_story_threads_block(state)
+    threads_msgs = [{"role": "system", "content": threads_block}] if threads_block else []
+
     # Author's Note: a short, persistent steering instruction injected close to
     # the end of the history so it strongly influences the next response.
     note = (getattr(state, "author_note", "") or "").strip()
@@ -444,7 +455,15 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
         insert_at = max(0, len(history) - depth)
         history = history[:insert_at] + [note_msg] + history[insert_at:]
 
-    messages = system_msgs + memory_msgs + lore_msgs + scene_msgs + canon_msgs + history
+    messages = (
+        system_msgs
+        + memory_msgs
+        + lore_msgs
+        + scene_msgs
+        + canon_msgs
+        + threads_msgs
+        + history
+    )
 
     # Director/scene-style directive is kept near the end for strong recency.
     style_block = build_style_directive(state, char, user)

@@ -32,6 +32,8 @@ export type ServerMsg =
   | { type: "continuity_status"; busy: boolean }
   | { type: "continuity_alert"; items: ContinuityReport[] }
   | { type: "continuity_resolved"; action: string }
+  | { type: "story_threads_updated"; threads: StoryThread[]; enabled: boolean; auto: boolean; covered: number; total: number; added?: number; unchanged?: boolean }
+  | { type: "story_threads_status"; busy: boolean }
   | { type: "wiped_all"; summary?: any }
   | { type: "error"; message: string };
 
@@ -51,6 +53,7 @@ export interface Message {
   genMs?: number;           // Generation wall time reported by the backend
   genTokens?: number;       // Approximate token count of this generation
   unprompted?: boolean;     // The character spoke first, into a silence
+  bookmarked?: boolean;     // A user-saved story moment, persisted with the transcript
 }
 
 export type RigAssetSource = "generated" | "uploaded" | "fallback";
@@ -247,6 +250,53 @@ export const DEFAULT_CONTINUITY: ContinuityState = {
   enabled: false,
   auto: true,
   facts: [],
+  covered: 0,
+};
+
+/**
+ * An unresolved dramatic hook the story can return to: a promise, goal,
+ * mystery, secret, threat, or relationship tension. Resolved and dropped
+ * threads stay in the story archive so they can be reviewed or reopened.
+ */
+export type StoryThreadKind =
+  | "goal"
+  | "promise"
+  | "mystery"
+  | "secret"
+  | "threat"
+  | "relationship"
+  | "other";
+
+export type StoryThreadStatus = "active" | "resolved" | "dropped";
+
+export interface StoryThread {
+  id: string;
+  title: string;
+  summary: string;
+  kind: StoryThreadKind;
+  status: StoryThreadStatus;
+  /** Pinned threads are retained and prioritized, including after they are archived. */
+  pinned: boolean;
+  /** Transcript message count when the thread first appeared. */
+  createdTurn: number;
+  /** Transcript message count when the thread last materially changed. */
+  updatedTurn: number;
+  /** Present when the thread was resolved or dropped against a specific turn. */
+  resolvedTurn?: number;
+}
+
+export interface StoryThreadsState {
+  enabled: boolean;
+  auto: boolean;
+  threads: StoryThread[];
+  /** Number of transcript messages already examined by automatic tracking. */
+  covered: number;
+}
+
+export const DEFAULT_STORY_THREADS: StoryThreadsState = {
+  enabled: true,
+  auto: true,
+  threads: [],
   covered: 0,
 };
 

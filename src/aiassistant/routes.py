@@ -32,8 +32,12 @@ async def root():
 
 
 async def wipe_data(request: Request):
-    """Erase all on-disk user data — saved/generated images, uploaded characters,
-    and log files — so no trace remains. Works independently of any WebSocket."""
+    """Erase every on-disk store beneath ``user_data``.
+
+    This deliberately includes unknown/new feature directories as well as
+    sessions, images, uploaded characters, and logs. It works independently of
+    any WebSocket.
+    """
     # The custom header forces a CORS preflight for cross-origin callers, so a
     # malicious web page can't fire this destructive request via drive-by CSRF.
     if request.headers.get("x-wipe-confirm") != "yes":
