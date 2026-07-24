@@ -1,4 +1,5 @@
 export { ControlSidebar } from "./ControlSidebar";
+export { ActionMenu, MenuAction, MenuSeparator } from "./ActionMenu";
 export { ConversationPanel } from "./ConversationPanel";
 export { DebugModal } from "./DebugModal";
 export { MessageItem } from "./MessageItem";
@@ -16,4 +17,6 @@ export { SceneBar } from "./SceneBar";
 export { CastBar } from "./CastBar";
 export { CharacterManager } from "./CharacterManager";
 export { SessionsModal } from "./SessionsModal";
+export { StoryNavigator } from "./StoryNavigator";
+export { StoryThreadsModal } from "./StoryThreadsModal";
 export { RigStage } from "./RigStage";

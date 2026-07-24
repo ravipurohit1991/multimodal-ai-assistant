@@ -1,9 +1,14 @@
-import { useRef } from "react";
+import {
+  useRef,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
 import { Theme } from "../theme";
 import {
   IconSend, IconImage, IconSkipForward, IconWand, IconBulb, IconFeather,
   IconX, IconAlert,
 } from "./Icons";
+import { ActionMenu, MenuAction } from "./ActionMenu";
 
 interface TextInputAreaProps {
   connected: boolean;
@@ -26,6 +31,7 @@ interface TextInputAreaProps {
   onImpersonate: () => void;
   onSuggest: () => void;
   onPickSuggestion: (text: string) => void;
+  onDismissSuggestions: () => void;
 }
 
 export function TextInputArea({
@@ -48,18 +54,19 @@ export function TextInputArea({
   onContinue,
   onImpersonate,
   onSuggest,
-  onPickSuggestion
+  onPickSuggestion,
+  onDismissSuggestions,
 }: TextInputAreaProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       onSend();
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
@@ -84,7 +91,7 @@ export function TextInputArea({
   const canNarrate = connected && !busy && textInput.trim().length > 0;
 
   return (
-    <div style={{
+    <div className="text-input-area" style={{
       padding: "12px 20px 14px",
       borderTop: `1px solid ${theme.colors.border}`,
       background: theme.colors.surface
@@ -154,19 +161,29 @@ export function TextInputArea({
 
       {/* Suggested replies — click a chip to drop it into the composer */}
       {suggestions.length > 0 && (
-        <div className="fade-up" style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          <span className="label-caps">Ideas</span>
-          {suggestions.map((s, i) => (
-            <button
-              key={i}
-              className="chip"
-              onClick={() => onPickSuggestion(s)}
-              title={s}
-              style={{ maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" }}
-            >
-              {s}
-            </button>
-          ))}
+        <div className="suggestion-strip fade-up">
+          <span className="label-caps">Suggested replies</span>
+          <div className="suggestion-options">
+            {suggestions.map((suggestion, index) => (
+              <button
+                key={`${index}-${suggestion}`}
+                className="chip"
+                onClick={() => onPickSuggestion(suggestion)}
+                title={suggestion}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="icon-btn sm"
+            onClick={onDismissSuggestions}
+            title="Dismiss suggestions"
+            aria-label="Dismiss suggested replies"
+          >
+            <IconX size={13} />
+          </button>
         </div>
       )}
 
@@ -189,7 +206,7 @@ export function TextInputArea({
           disabled={!connected}
           rows={2}
         />
-        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px 8px" }}>
+        <div className="composer-actions" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px 8px" }}>
           <button
             className="icon-btn"
             onClick={() => fileInputRef.current?.click()}
@@ -203,38 +220,50 @@ export function TextInputArea({
           <div style={{ width: 1, height: 20, background: theme.colors.border, margin: "0 4px" }} />
 
           {/* AI assists (need an existing conversation) */}
-          <button
-            className="btn btn-quiet"
-            onClick={onContinue}
+          <ActionMenu
+            label="Writing help"
+            icon={<IconBulb size={14} />}
+            align="start"
+            panelWidth={300}
+            rootClassName="composer-writing-menu"
             disabled={!connected || busy || !hasHistory}
-            title="Ask the character to keep going"
-            style={{ padding: "5px 10px", fontSize: 12.5 }}
+            title="Get help writing the next part of the story"
           >
-            <IconSkipForward size={14} /> {isContinuing ? "Continuing…" : "Continue"}
-          </button>
-          <button
-            className="btn btn-quiet"
-            onClick={onImpersonate}
-            disabled={!connected || busy || !hasHistory}
-            title="Let the AI draft your next line (you can edit it before sending)"
-            style={{ padding: "5px 10px", fontSize: 12.5 }}
-          >
-            <IconWand size={14} /> {isImpersonating ? "Writing…" : "Write for me"}
-          </button>
-          <button
-            className="btn btn-quiet"
-            onClick={onSuggest}
-            disabled={!connected || busy || !hasHistory}
-            title="Suggest a few replies you could send"
-            style={{ padding: "5px 10px", fontSize: 12.5 }}
-          >
-            <IconBulb size={14} /> {isSuggesting ? "Thinking…" : "Ideas"}
-          </button>
+            {(closeMenu) => (
+              <>
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconBulb size={15} />}
+                  label={isSuggesting ? "Thinking…" : "Suggest replies"}
+                  description="Get a few ideas you could send next"
+                  disabled={!connected || busy || !hasHistory}
+                  onSelect={onSuggest}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconWand size={15} />}
+                  label={isImpersonating ? "Writing…" : "Draft my reply"}
+                  description="Create an editable draft in your voice"
+                  disabled={!connected || busy || !hasHistory}
+                  onSelect={onImpersonate}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconSkipForward size={15} />}
+                  label={isContinuing ? "Continuing…" : "Continue story"}
+                  description="Ask the character to keep the scene moving"
+                  disabled={!connected || busy || !hasHistory}
+                  onSelect={onContinue}
+                />
+              </>
+            )}
+          </ActionMenu>
           <button
             className="btn btn-quiet"
             onClick={onNarrate}
             disabled={!canNarrate}
             title="Send as narration — an omniscient scene beat the character reacts to"
+            aria-label="Send as narration"
             style={{ padding: "5px 10px", fontSize: 12.5 }}
           >
             <IconFeather size={14} /> Narrate

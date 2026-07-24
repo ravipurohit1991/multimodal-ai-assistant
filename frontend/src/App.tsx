@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY, StoryThread, StoryThreadKind, StoryThreadsState } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -18,13 +18,16 @@ import { LorebookModal } from "./components/LorebookModal";
 import { MemoryModal } from "./components/MemoryModal";
 import { CanonModal } from "./components/CanonModal";
 import { SessionsModal } from "./components/SessionsModal";
+import { StoryThreadsModal } from "./components/StoryThreadsModal";
 import { downloadJson, downloadText, readJsonFile } from "./io";
 import { getTheme, applyThemeToDocument } from "./theme";
 import { buildAmbient } from "./atmosphere";
 import { moodToColor } from "./mood";
 import { Soundscape } from "./soundscape";
+import { countStoryThreads, normalizeStoryThreadsState } from "./storyThreads";
 import { createGeneratedRig, createUploadedRig } from "./rigs";
 import { upgradeRoleplayPrompt } from "./prompts";
+import { wipeBrowserPersistence } from "./persistence";
 
 // Short, collision-unlikely id for roster characters.
 function makeId(): string {
@@ -39,6 +42,24 @@ function serializeLorebook(entries: LorebookEntry[]) {
     content: e.content,
     enabled: e.enabled,
     constant: e.constant,
+  }));
+}
+
+// Keep the browser-friendly camelCase model separate from the backend wire
+// shape, while preserving opaque ids and pins across reconnects and saves.
+function serializeStoryThreads(threads: StoryThread[]) {
+  return threads.map((thread) => ({
+    id: thread.id,
+    title: thread.title,
+    summary: thread.summary,
+    kind: thread.kind,
+    status: thread.status,
+    pinned: thread.pinned,
+    created_turn: thread.createdTurn,
+    updated_turn: thread.updatedTurn,
+    ...(typeof thread.resolvedTurn === "number"
+      ? { resolved_turn: thread.resolvedTurn }
+      : {}),
   }));
 }
 
@@ -132,6 +153,9 @@ export default function App() {
 
   // Conversation history — persisted in localStorage
   const [conversationHistory, setConversationHistory] = useState<Message[]>(loadHistoryFromStorage);
+  // Changes only when a different saved/imported story replaces the transcript.
+  // ConversationPanel uses it to reset its scroll position even for a shorter story.
+  const [historyRevision, setHistoryRevision] = useState(0);
   // Immersive / cinematic reading mode — serif prose, a reactive scene/mood
   // ambient background, and collapsed side chrome. Persisted; when on, both side
   // panels start hidden so the story fills the view.
@@ -195,6 +219,17 @@ export default function App() {
   const [continuityBusy, setContinuityBusy] = useState(false);
   const [continuityReports, setContinuityReports] = useState<ContinuityReport[]>([]);
   const [showCanon, setShowCanon] = useState(false);
+  // Story Threads — unresolved goals, promises, mysteries, and tensions. The
+  // tracker is server-authored but travels with the story and remains editable.
+  const [storyThreads, setStoryThreads] = useState<StoryThreadsState>(() => (
+    normalizeStoryThreadsState(savedSettings.storyThreads)
+  ));
+  const [storyThreadsBusy, setStoryThreadsBusy] = useState(false);
+  const [showStoryThreads, setShowStoryThreads] = useState(false);
+  const storyThreadCounts = useMemo(
+    () => countStoryThreads(storyThreads.threads),
+    [storyThreads.threads],
+  );
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
   const [adultMode, setAdultMode] = useState<boolean>(savedSettings.adultMode === true);
   const [assistantMood, setAssistantMood] = useState("");
@@ -360,6 +395,9 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const micStopRef = useRef<null | (() => Promise<void>)>(null);
+  // Persistence effects must stay dormant from the moment a wipe begins until
+  // the page reloads, otherwise late WebSocket/UI updates can recreate storage.
+  const wipingRef = useRef(false);
 
   const player = useMemo(() => new PcmPlayer(), []);
   const pendingAudioSr = useRef<number | null>(null);
@@ -597,6 +635,19 @@ export default function App() {
         }
         if (msg.type === "continuity_resolved") {
           setContinuityReports([]);
+        }
+        if (msg.type === "story_threads_updated") {
+          // As with memory and canon, the backend owns ids, merge decisions, and
+          // the transcript cursor. Normalize wire aliases before mirroring it.
+          setStoryThreads(normalizeStoryThreadsState({
+            enabled: msg.enabled,
+            auto: msg.auto,
+            threads: msg.threads || [],
+            covered: msg.covered,
+          }));
+        }
+        if (msg.type === "story_threads_status") {
+          setStoryThreadsBusy(msg.busy);
         }
         if (msg.type === "image_generating") {
           console.log(`🎨 Generating image: ${msg.prompt}`);
@@ -1152,6 +1203,9 @@ export default function App() {
     setContinuity((prev) => ({ ...prev, facts: [], covered: 0 }));
     setContinuityReports([]);
     setContinuityBusy(false);
+    // Open dramatic questions belong to this transcript just as canon does.
+    setStoryThreads((prev) => ({ ...prev, threads: [], covered: 0 }));
+    setStoryThreadsBusy(false);
     pendingMoodRef.current = "";
     pendingAnimationRef.current = null;
   };
@@ -1161,39 +1215,100 @@ export default function App() {
   // erase on-disk data (saved/generated images, uploaded characters, and logs),
   // then hard-reloads into a pristine app.
   const wipeEverything = async () => {
+    if (wipingRef.current) return;
     const ok = window.confirm(
       "⚠️ WIPE EVERYTHING?\n\n" +
       "This permanently erases all of it — there is NO undo:\n" +
       "• This conversation & history\n" +
       "• Every character in the cast + your persona\n" +
-      "• Lorebook, Author's Note, scene & all settings\n" +
-      "• Saved images, uploaded characters, and logs on disk\n\n" +
+      "• Story memory, story canon, story threads & bookmarks\n" +
+      "• Lorebook, Author's Note, scene & every setting\n" +
+      "• Saved stories, images, uploaded characters & logs on disk\n\n" +
       "Continue?"
     );
     if (!ok) return;
+    wipingRef.current = true;
 
-    // Reset the live connection's server state (if connected).
-    try { sendJson({ type: "wipe_all" }); } catch (e) { console.error(e); }
-
-    // Erase on-disk data over HTTP — reliable even if the socket is closed.
-    try {
-      await fetch("http://127.0.0.1:8000/api/wipe", {
-        method: "POST",
-        headers: { "X-Wipe-Confirm": "yes" },
-      });
-    } catch (e) {
-      console.error("Failed to wipe on-disk data:", e);
+    player.resetQueue();
+    soundscape.setEnabled(false);
+    if (micStopRef.current) {
+      try {
+        await micStopRef.current();
+      } catch (error) {
+        console.error("Failed to stop the microphone during wipe:", error);
+      }
+      micStopRef.current = null;
+    }
+    if (vadRef.current) {
+      try {
+        vadRef.current.pause();
+      } catch (error) {
+        console.error("Failed to stop voice detection during wipe:", error);
+      }
+      vadRef.current = null;
     }
 
-    // Clear every local trace for this app.
+    // Clear first so no browser-held state survives even if the server is down.
+    const firstBrowserWipe = await wipeBrowserPersistence();
+    if (firstBrowserWipe.errors.length > 0) {
+      console.warn("Browser wipe warnings:", firstBrowserWipe.errors);
+    }
+
+    // Reset the current socket too. This covers all in-memory feature state,
+    // while the HTTP request below independently guarantees disk cleanup.
     try {
-      localStorage.removeItem(HISTORY_STORAGE_KEY);
-      localStorage.removeItem(SETTINGS_STORAGE_KEY);
-      Object.keys(localStorage)
-        .filter((k) => k.startsWith("aiassistant"))
-        .forEach((k) => localStorage.removeItem(k));
-    } catch (e) {
-      console.error("Failed to clear local storage:", e);
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        sendJson({ type: "wipe_all" });
+      }
+    } catch (error) {
+      console.error("Failed to reset live connection state:", error);
+    }
+
+    let serverWipeError: unknown = null;
+    try {
+      const endpoints = window.location.port === "8000"
+        ? ["/api/wipe"]
+        : ["/api/wipe", "http://127.0.0.1:8000/api/wipe"];
+      const failures: string[] = [];
+      let wiped = false;
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "X-Wipe-Confirm": "yes" },
+          });
+          const payload = await response.json().catch(() => null);
+          if (response.ok && payload?.success === true) {
+            wiped = true;
+            break;
+          }
+          failures.push(`${endpoint}: ${payload?.error || response.statusText || response.status}`);
+        } catch (error) {
+          failures.push(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      if (!wiped) throw new Error(failures.join("; ") || "No wipe endpoint was reachable");
+    } catch (error) {
+      serverWipeError = error;
+      console.error("Failed to wipe on-disk data:", error);
+    }
+
+    // Close the old state container and sweep once more after any late events.
+    wsRef.current?.close();
+    wsRef.current = null;
+    const finalBrowserWipe = await wipeBrowserPersistence();
+    const browserErrors = [...firstBrowserWipe.errors, ...finalBrowserWipe.errors];
+
+    if (serverWipeError || browserErrors.length > 0) {
+      const details = [
+        serverWipeError
+          ? "Some server files could not be confirmed erased. Check that the backend is running, then use Wipe Everything again."
+          : "",
+        browserErrors.length > 0
+          ? "Some browser storage reported that it was blocked; closing other tabs and wiping again will clear it."
+          : "",
+      ].filter(Boolean).join("\n\n");
+      window.alert(`The wipe completed with a warning.\n\n${details}`);
     }
 
     // Hard-reload into a pristine state (every store re-initializes to defaults).
@@ -1292,6 +1407,75 @@ export default function App() {
     setContinuity((prev) => ({ ...prev, facts: [], covered: 0 }));
     setContinuityReports([]);
     sendJson({ type: "forget_canon" });
+  };
+
+  // ----- Story threads -----
+  // Threads are intentionally independent of canon: canon records what is true,
+  // while this ledger records what may still deserve a payoff.
+  const pushStoryThreadSettings = (patch: Partial<StoryThreadsState>) => {
+    const next = { ...storyThreads, ...patch };
+    setStoryThreads(next);
+    if (patch.enabled === false) setStoryThreadsBusy(false);
+    sendJson({
+      type: "set_story_threads",
+      enabled: next.enabled,
+      auto: next.auto,
+    });
+  };
+
+  const updateStoryThreads = (threads: StoryThread[]) => {
+    const messageCount = conversationHistory.length;
+    const previousById = new Map(
+      storyThreads.threads.map((thread) => [thread.id, thread]),
+    );
+    const stamped = threads.map((thread) => {
+      const previous = previousById.get(thread.id);
+      const materiallyChanged = previous && (
+        previous.title !== thread.title
+        || previous.summary !== thread.summary
+        || previous.kind !== thread.kind
+        || previous.status !== thread.status
+      );
+      if (!materiallyChanged) return thread;
+
+      const updatedTurn = Math.max(thread.createdTurn, messageCount);
+      if (thread.status === "active") {
+        const active = { ...thread };
+        delete active.resolvedTurn;
+        return { ...active, updatedTurn };
+      }
+      return { ...thread, updatedTurn, resolvedTurn: updatedTurn };
+    });
+    setStoryThreads((prev) => ({ ...prev, threads: stamped }));
+    sendJson({ type: "set_threads", threads: serializeStoryThreads(stamped) });
+  };
+
+  const addStoryThread = (draft: { title: string; summary: string; kind: StoryThreadKind }) => {
+    sendJson({
+      type: "add_story_thread",
+      title: draft.title,
+      summary: draft.summary,
+      kind: draft.kind,
+      // A thread the reader explicitly adds is retained like a hand-authored
+      // canon fact, but pinning never prevents it from being resolved.
+      pinned: true,
+    });
+  };
+
+  const refreshStoryThreads = (rebuild = false) => {
+    if (!wsRef.current || storyThreadsBusy || !storyThreads.enabled) return;
+    setStoryThreadsBusy(true);
+    sendJson({ type: "refresh_story_threads", rebuild });
+  };
+
+  const forgetStoryThreads = () => {
+    setStoryThreads((prev) => ({ ...prev, threads: [], covered: 0 }));
+    setStoryThreadsBusy(false);
+    sendJson({ type: "forget_story_threads" });
+  };
+
+  const clearArchivedStoryThreads = () => {
+    updateStoryThreads(storyThreads.threads.filter((thread) => thread.status === "active"));
   };
 
   // What the reader decided about a reported contradiction. "Write it again"
@@ -1399,7 +1583,7 @@ export default function App() {
       // not even looking at — a beat nobody sees still costs a generation.
       if (isSendingMessage || isContinuing || isImpersonating || isStreaming) return;
       if (recording || inCall || expectingPresenceRef.current) return;
-      if (showSettings || showCharacterManager || showLorebook || showMemory || showCanon || showSessions) return;
+      if (showSettings || showCharacterManager || showLorebook || showMemory || showCanon || showStoryThreads || showSessions) return;
       if (conversationHistory.length === 0) return;
       if (document.visibilityState !== "visible") return;
 
@@ -1529,7 +1713,7 @@ export default function App() {
     conversationHistory,
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
-      authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory, continuity,
+      authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory, continuity, storyThreads,
       responseLength, narrationPerspective, pacing, scene, autoScene, presence,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
@@ -1556,6 +1740,7 @@ export default function App() {
     if (sceneBits) lines.push(`*Scene: ${sceneBits}*`, "");
     lines.push(`*Exported ${new Date().toLocaleString()} · ${conversationHistory.length} messages*`, "", "---", "");
     for (const m of conversationHistory) {
+      if (m.bookmarked) lines.push("> ★ Bookmarked moment", "");
       if (m.narrator) {
         lines.push(`*${m.content.trim()}*`, "");
         continue;
@@ -1601,6 +1786,11 @@ export default function App() {
     setContinuity(loadedContinuity);
     setContinuityReports([]);
     setContinuityBusy(false);
+    // Older sessions simply begin with an empty tracker; importing one story
+    // must never leave another story's unresolved threads behind.
+    const loadedStoryThreads = normalizeStoryThreadsState(s.storyThreads);
+    setStoryThreads(loadedStoryThreads);
+    setStoryThreadsBusy(false);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
     if (s.pacing) setPacing(s.pacing as Pacing);
@@ -1639,6 +1829,7 @@ export default function App() {
     if (typeof s.includeImageGen === "boolean") setIncludeImageGen(s.includeImageGen);
     if (typeof s.userCharacterImage === "string") setUserCharacterImage(s.userCharacterImage);
     if (typeof s.assistantCharacterImage === "string") setAssistantCharacterImage(s.assistantCharacterImage);
+    setHistoryRevision((revision) => revision + 1);
     setConversationHistory(history);
     setAssistantMood("");
     setStageDirective(null);
@@ -1716,6 +1907,13 @@ export default function App() {
         facts: loadedContinuity.facts,
         covered: loadedContinuity.covered,
       });
+      sendJson({
+        type: "set_story_threads",
+        enabled: loadedStoryThreads.enabled,
+        auto: loadedStoryThreads.auto,
+        threads: serializeStoryThreads(loadedStoryThreads.threads),
+        covered: loadedStoryThreads.covered,
+      });
     }
   };
 
@@ -1756,6 +1954,19 @@ export default function App() {
     sendJson({ type: "set_output_mode", mode });
   };
 
+
+  // Bookmarks are transcript metadata: they persist in local storage and every
+  // session snapshot, but never enter the model's conversational context.
+  const handleToggleBookmark = (index: number) => {
+    setConversationHistory((history) => {
+      if (index < 0 || index >= history.length) return history;
+      return history.map((message, messageIndex) => (
+        messageIndex === index
+          ? { ...message, bookmarked: !message.bookmarked }
+          : message
+      ));
+    });
+  };
 
 
   const handleDeleteMessage = (index: number) => {
@@ -1826,15 +2037,6 @@ export default function App() {
         text: lastMessage.content
       }));
     }
-  };
-
-  const handleRegenerateResponse = (index?: number) => {
-    // Regenerate keeps the previous reply as a swipe instead of discarding it.
-    const targetIndex = typeof index === "number"
-      ? index
-      : conversationHistory.findLastIndex(msg => msg.role === "assistant");
-    if (targetIndex < 0) return;
-    generateSwipe(targetIndex);
   };
 
   const handleImpersonate = () => {
@@ -2092,11 +2294,13 @@ export default function App() {
 
   // Persist conversation history to localStorage whenever it changes
   useEffect(() => {
+    if (wipingRef.current) return;
     saveHistoryToStorage(conversationHistory);
   }, [conversationHistory]);
 
   // Persist key settings to localStorage
   useEffect(() => {
+    if (wipingRef.current) return;
     saveSettings({
       themeName,
       userName,
@@ -2115,6 +2319,7 @@ export default function App() {
       lorebook,
       memory,
       continuity,
+      storyThreads,
       responseLength,
       narrationPerspective,
       pacing,
@@ -2135,7 +2340,7 @@ export default function App() {
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, storyThreads, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -2203,6 +2408,13 @@ export default function App() {
         auto: continuity.auto,
         facts: continuity.facts,
         covered: continuity.covered,
+      });
+      sendJson({
+        type: "set_story_threads",
+        enabled: storyThreads.enabled,
+        auto: storyThreads.auto,
+        threads: serializeStoryThreads(storyThreads.threads),
+        covered: storyThreads.covered,
       });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
@@ -2331,6 +2543,7 @@ export default function App() {
 
         <ConversationPanel
           conversationHistory={conversationHistory}
+          historyRevision={historyRevision}
           userName={userName}
           assistantName={assistantName}
           showLeftPanel={showLeftPanel}
@@ -2359,12 +2572,17 @@ export default function App() {
           immersive={immersive}
           scene={scene}
           fxEnabled={fxEnabled}
+          memoryEnabled={memory.enabled}
           memoryCovered={memory.enabled ? memory.covered : 0}
           memoryBusy={memoryBusy}
           canonSize={continuity.facts.length}
           continuityEnabled={continuity.enabled}
           continuityBusy={continuityBusy}
           continuityReports={continuity.enabled ? continuityReports : []}
+          activeThreadCount={storyThreadCounts.active}
+          pinnedThreadCount={storyThreadCounts.pinnedActive}
+          threadsEnabled={storyThreads.enabled}
+          threadsBusy={storyThreadsBusy}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -2392,13 +2610,14 @@ export default function App() {
           onDeleteMessage={handleDeleteMessage}
           onRewindToMessage={handleRewindToMessage}
           onResendMessage={handleResendMessage}
-          onRegenerateResponse={handleRegenerateResponse}
           onSwipe={handleSwipe}
           onPlayMessage={handlePlayAssistantMessage}
+          onToggleBookmark={handleToggleBookmark}
           onEditingTextChange={(text) => setEditingMessage(editingMessage ? { ...editingMessage, text } : null)}
           onShowLorebook={() => setShowLorebook(true)}
           onShowMemory={() => setShowMemory(true)}
           onShowCanon={() => setShowCanon(true)}
+          onShowThreads={() => setShowStoryThreads(true)}
           onResolveContinuity={resolveContinuity}
         />
 
@@ -2439,6 +2658,7 @@ export default function App() {
           onImpersonate={handleImpersonate}
           onSuggest={handleSuggest}
           onPickSuggestion={pickSuggestion}
+          onDismissSuggestions={() => setSuggestions([])}
         />
       </div>
 
@@ -2530,6 +2750,24 @@ export default function App() {
         onAddFact={addCanonFact}
         onHarvest={harvestCanon}
         onForget={forgetCanon}
+      />
+
+      {/* Story threads — unresolved dramatic possibilities, kept separate from canon */}
+      <StoryThreadsModal
+        show={showStoryThreads}
+        storyThreads={storyThreads}
+        busy={storyThreadsBusy}
+        connected={connected}
+        theme={theme}
+        onClose={() => setShowStoryThreads(false)}
+        onToggleEnabled={(enabled) => pushStoryThreadSettings({ enabled })}
+        onToggleAuto={(auto) => pushStoryThreadSettings({ auto })}
+        onThreadsChange={updateStoryThreads}
+        onAdd={addStoryThread}
+        onScanLatest={() => refreshStoryThreads(false)}
+        onRebuild={() => refreshStoryThreads(true)}
+        onForget={forgetStoryThreads}
+        onClearArchived={clearArchivedStoryThreads}
       />
 
       {/* Character roster / cast manager */}

@@ -69,7 +69,24 @@ from aiassistant.roleplay import (
     parse_scene_tag,
     presence_max_beats,
 )
-from aiassistant.state import ConnState, cancel_continuity, cancel_llm, cancel_memory
+from aiassistant.state import (
+    ConnState,
+    cancel_continuity,
+    cancel_llm,
+    cancel_memory,
+    cancel_story_threads,
+    wipe_connection_state,
+)
+from aiassistant.story_threads import (
+    THREAD_HARVEST_TIMEOUT_SECONDS,
+    THREAD_UPDATE_TIMEOUT_SECONDS,
+    new_story_thread,
+    normalize_story_threads,
+    reset_story_threads,
+    should_update_story_threads,
+    story_thread_cursor,
+    update_story_threads,
+)
 from aiassistant.utils import (
     image_to_base64,
     logger,
@@ -151,9 +168,10 @@ async def ws_endpoint(ws: WebSocket):
         """One Story Memory pass, reported to the UI at both ends."""
         try:
             await send_json({"type": "memory_status", "busy": True})
-            result = await asyncio.wait_for(
-                summarize_story(state, force=force), timeout=PASS_TIMEOUT_SECONDS
-            )
+            async with state.auxiliary_lock:
+                result = await asyncio.wait_for(
+                    summarize_story(state, force=force), timeout=PASS_TIMEOUT_SECONDS
+                )
             if result is None:
                 await send_json(memory_state_payload({"unchanged": True}))
                 return
@@ -213,9 +231,10 @@ async def ws_endpoint(ws: WebSocket):
         """
         try:
             await send_json({"type": "continuity_status", "busy": True})
-            result = await asyncio.wait_for(
-                review_reply(state, reply_text), timeout=REVIEW_TIMEOUT_SECONDS
-            )
+            async with state.auxiliary_lock:
+                result = await asyncio.wait_for(
+                    review_reply(state, reply_text), timeout=REVIEW_TIMEOUT_SECONDS
+                )
             if result is None:
                 return
 
@@ -270,7 +289,10 @@ async def ws_endpoint(ws: WebSocket):
         """Read the whole story and fold what it established into the ledger."""
         try:
             await send_json({"type": "continuity_status", "busy": True})
-            facts = await asyncio.wait_for(harvest_canon(state), timeout=HARVEST_TIMEOUT_SECONDS)
+            async with state.auxiliary_lock:
+                facts = await asyncio.wait_for(
+                    harvest_canon(state), timeout=HARVEST_TIMEOUT_SECONDS
+                )
             if not facts:
                 await send_json(canon_state_payload({"unchanged": True}))
                 return
@@ -294,6 +316,125 @@ async def ws_endpoint(ws: WebSocket):
                 await send_json({"type": "continuity_status", "busy": False})
             except Exception:
                 pass  # connection likely gone
+
+    def story_threads_state_payload(extra: dict | None = None) -> dict:
+        """The client's complete Story Threads ledger and exact history cursor."""
+        history = conversation_messages(state)
+        payload = {
+            "type": "story_threads_updated",
+            "threads": state.story_threads,
+            "enabled": state.story_threads_enabled,
+            "auto": state.story_threads_auto,
+            "covered": story_thread_cursor(state, len(history)),
+            "total": len(history),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    # Set when a reply completes during the worker's narrow shutdown window.
+    # Without this latch, the scheduler could see the old task still alive just
+    # after it made its final pending check and lose that newest turn.
+    story_threads_rescan_requested = False
+
+    async def run_story_threads_update(*, force: bool = False, rebuild: bool = False):
+        """Run one or more serialized scans without delaying the visible reply.
+
+        Incremental passes deliberately coalesce: if another reply lands while a
+        scan is reading, the same background task keeps going until it catches
+        the cursor up. A full rebuild is one atomic whole-story pass.
+        """
+        timeout = (
+            THREAD_HARVEST_TIMEOUT_SECONDS if rebuild else THREAD_UPDATE_TIMEOUT_SECONDS
+        )
+        cancelled = False
+        try:
+            nonlocal story_threads_rescan_requested
+            await send_json({"type": "story_threads_status", "busy": True})
+            while True:
+                before = story_thread_cursor(
+                    state, len(conversation_messages(state))
+                )
+                async with state.auxiliary_lock:
+                    result = await asyncio.wait_for(
+                        update_story_threads(state, force=force, rebuild=rebuild),
+                        timeout=timeout,
+                    )
+
+                if result is None:
+                    await send_json(story_threads_state_payload({"unchanged": True}))
+                    break
+
+                # The domain layer returns a complete proposed ledger and never
+                # mutates connection state. Store both pieces together so the UI
+                # can never observe a new cursor paired with an old ledger.
+                state.story_threads = result["threads"]
+                state.story_threads_covered = result["covered"]
+                changes = {
+                    key: result[key]
+                    for key in ("added", "updated", "resolved", "dropped", "removed")
+                }
+                if not result["changes"]:
+                    changes["unchanged"] = True
+                await send_json(story_threads_state_payload(changes))
+
+                if rebuild:
+                    break
+
+                history = conversation_messages(state)
+                after = story_thread_cursor(state, len(history))
+                if after <= before:
+                    # A broken model response must not turn the background worker
+                    # into a tight retry loop.
+                    logger.warning("Story thread pass made no cursor progress; stopping")
+                    break
+                has_pending = after < len(history)
+                if not has_pending:
+                    break
+                if not force and not should_update_story_threads(state):
+                    break
+                story_threads_rescan_requested = False
+        except asyncio.CancelledError:
+            cancelled = True
+            logger.info("Story thread pass cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Story thread pass timed out after {timeout}s")
+            await send_json(story_threads_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Story thread pass failed: {e}")
+            await send_json(story_threads_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "story_threads_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+            if (
+                not cancelled
+                and story_threads_rescan_requested
+                and should_update_story_threads(state)
+            ):
+                # ``call_soon`` runs after this coroutine has become done, so the
+                # one-worker guard accepts the catch-up task.
+                asyncio.get_running_loop().call_soon(schedule_story_threads_update)
+
+    def schedule_story_threads_update(
+        *, force: bool = False, rebuild: bool = False
+    ) -> bool:
+        """Queue a Story Threads pass, with at most one worker per connection."""
+        nonlocal story_threads_rescan_requested
+        if not state.story_threads_enabled:
+            return False
+        if state.story_threads_task and not state.story_threads_task.done():
+            story_threads_rescan_requested = True
+            return False
+        if not force and not rebuild and not should_update_story_threads(state):
+            return False
+        story_threads_rescan_requested = False
+        state.story_threads_task = asyncio.create_task(
+            run_story_threads_update(force=force, rebuild=rebuild)
+        )
+        return True
 
     async def process_text_message(
         user_text: str,
@@ -801,6 +942,16 @@ async def ws_endpoint(ws: WebSocket):
             # would leave switched on.
             if schedule_continuity_check(stored_full):
                 logger.info("Continuity check queued for the latest reply")
+
+            # Story Threads reads the newly completed turn after it is visible.
+            # Its worker coalesces if another turn arrives before this pass wins
+            # the shared auxiliary-model lock.
+            if schedule_story_threads_update():
+                history = conversation_messages(state)
+                covered = story_thread_cursor(state, len(history))
+                logger.info(
+                    f"Story thread pass queued ({len(history) - covered} messages pending)"
+                )
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -939,18 +1090,21 @@ async def ws_endpoint(ws: WebSocket):
 
                 elif mtype == "clear_chat":
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
+                    await cancel_story_threads(state)
                     state.messages = system_msgs
                     # The running memory describes a story that no longer exists,
-                    # and so does everything the story had established.
+                    # and so do its canon and unresolved threads.
                     await cancel_memory(state)
                     reset_memory(state)
                     await cancel_continuity(state)
                     reset_canon(state)
+                    reset_story_threads(state)
                     state.presence_beats = 0
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
                     await send_json(memory_state_payload())
                     await send_json(canon_state_payload())
+                    await send_json(story_threads_state_payload())
 
                 elif mtype == "wipe_all":
                     # Nuke everything: cancel any work, reset this connection's
@@ -966,31 +1120,24 @@ async def ws_endpoint(ws: WebSocket):
                         )
                     else:
                         logger.info("Wipe-all requested — clearing conversation and on-disk data")
-                        await cancel_llm(state)
-                        await cancel_memory(state)
-                        reset_memory(state)
-                        await cancel_continuity(state)
-                        reset_canon(state)
-                        state.speaking = False
-                        state.messages = [m for m in state.messages if m["role"] == "system"]
-                        state.lorebook = []
-                        state.author_note = ""
-                        state.scene_time = ""
-                        state.scene_weather = ""
-                        state.scene_location = ""
-                        state.director_beat = ""
-                        state.presence_beats = 0
+                        await wipe_connection_state(state)
                         try:
                             summary = wipe_user_data(clear_logs=True)
                             logger.info(f"Wipe-all complete: {summary}")
                         except Exception as e:
                             logger.error(f"Wipe-all disk cleanup failed: {e}")
                             summary = {"error": str(e)}
+                        await send_json(memory_state_payload())
+                        await send_json(canon_state_payload())
+                        await send_json(story_threads_state_payload())
                         await send_json({"type": "wiped_all", "summary": summary})
 
                 elif mtype == "sync_history":
                     history = data.get("history", [])
                     system_msgs = [m for m in state.messages if m["role"] == "system"]
+                    # A scan against the old transcript must never land on top of
+                    # an edit, rewind, session load, or reconnect restore.
+                    await cancel_story_threads(state)
                     state.messages = system_msgs + history
                     # Edits, rewinds, and deletions move the ground under the
                     # memory cursor; keep it inside the story it indexes. The
@@ -1004,8 +1151,19 @@ async def ws_endpoint(ws: WebSocket):
                     state.presence_beats = 0
                     state.continuity_alert = None
                     state.canon_covered = min(state.canon_covered, len(history))
+                    # Any indexed passage may have been deleted. Derived threads
+                    # cannot prove their own removal during incremental catch-up,
+                    # so discard them rather than inject stale possibilities into
+                    # the next reply. Explicitly pinned reader intent survives.
+                    state.story_threads = [
+                        thread
+                        for thread in normalize_story_threads(state.story_threads)
+                        if thread.get("pinned")
+                    ]
+                    state.story_threads_covered = 0
                     logger.info(f"History synced: {len(history)} messages")
                     await send_json({"type": "ack", "history_synced": True})
+                    await send_json(story_threads_state_payload())
 
                 elif mtype == "set_context_mode":
                     state.use_context = data.get("enabled", True)
@@ -1156,6 +1314,84 @@ async def ws_endpoint(ws: WebSocket):
                     reset_canon(state)
                     logger.info("Canon cleared by user")
                     await send_json(canon_state_payload())
+
+                elif mtype == "set_story_threads":
+                    # Settings and a restored session snapshot share one message,
+                    # mirroring Story Memory and Continuity Guard. Cancel first so
+                    # an older scan cannot overwrite the restored ledger.
+                    await cancel_story_threads(state)
+                    restoring_snapshot = "threads" in data or "covered" in data
+                    if "enabled" in data:
+                        state.story_threads_enabled = bool(data.get("enabled"))
+                    if "auto" in data:
+                        state.story_threads_auto = bool(data.get("auto"))
+                    if "threads" in data:
+                        state.story_threads = normalize_story_threads(data.get("threads"))
+                    if isinstance(data.get("covered"), int):
+                        history_len = len(conversation_messages(state))
+                        state.story_threads_covered = max(
+                            0, min(int(data["covered"]), history_len)
+                        )
+                    logger.info(
+                        f"Story threads: {'on' if state.story_threads_enabled else 'off'}, "
+                        f"auto={'on' if state.story_threads_auto else 'off'}, "
+                        f"{len(state.story_threads)} saved, covering "
+                        f"{state.story_threads_covered} messages"
+                    )
+                    await send_json(story_threads_state_payload())
+                    # Enabling tracking can catch up immediately. A reconnect or
+                    # session restore waits for the next reply/manual scan instead:
+                    # the remaining socket settings (notably model/host) may still
+                    # be in flight behind this message.
+                    if not restoring_snapshot and schedule_story_threads_update():
+                        logger.info("Story thread catch-up queued after tracking was enabled")
+
+                elif mtype == "set_threads":
+                    # Direct edits (title, summary, status, pin, deletion) are
+                    # authoritative user choices.
+                    await cancel_story_threads(state)
+                    state.story_threads = normalize_story_threads(data.get("threads"))
+                    logger.info(
+                        f"Story thread ledger edited by user: "
+                        f"{len(state.story_threads)} thread(s)"
+                    )
+                    await send_json(story_threads_state_payload())
+
+                elif mtype == "add_story_thread":
+                    await cancel_story_threads(state)
+                    existing = normalize_story_threads(state.story_threads)
+                    thread = new_story_thread(
+                        str(data.get("title", "") or ""),
+                        str(data.get("summary", "") or ""),
+                        kind=str(data.get("kind", "other") or "other"),
+                        pinned=bool(data.get("pinned", True)),
+                        created_turn=len(conversation_messages(state)),
+                    )
+                    state.story_threads = normalize_story_threads([*existing, thread])
+                    added = int(len(state.story_threads) > len(existing))
+                    if added:
+                        logger.info(f"Story thread added by user: {thread['title'][:80]}")
+                    await send_json(
+                        story_threads_state_payload(
+                            {"added": added, **({"unchanged": True} if not added else {})}
+                        )
+                    )
+
+                elif mtype == "refresh_story_threads":
+                    # Scan only uncovered turns by default; ``rebuild`` asks for
+                    # one evidence-backed reading of the whole story.
+                    rebuild = bool(data.get("rebuild", False))
+                    if not state.story_threads_enabled:
+                        await send_json(story_threads_state_payload({"unchanged": True}))
+                        await send_json({"type": "story_threads_status", "busy": False})
+                    elif not schedule_story_threads_update(force=True, rebuild=rebuild):
+                        logger.info("Story thread pass already running; ignoring refresh request")
+
+                elif mtype == "forget_story_threads":
+                    await cancel_story_threads(state)
+                    reset_story_threads(state)
+                    logger.info("Story threads cleared by user")
+                    await send_json(story_threads_state_payload())
 
                 elif mtype == "resolve_continuity":
                     # What the user decided about a reported contradiction. The
@@ -1585,6 +1821,7 @@ async def ws_endpoint(ws: WebSocket):
         await cancel_llm(state)
         await cancel_memory(state)
         await cancel_continuity(state)
+        await cancel_story_threads(state)
         return
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
@@ -1594,4 +1831,5 @@ async def ws_endpoint(ws: WebSocket):
         await cancel_llm(state)
         await cancel_memory(state)
         await cancel_continuity(state)
+        await cancel_story_threads(state)
         return

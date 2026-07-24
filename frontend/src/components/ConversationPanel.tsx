@@ -1,6 +1,8 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Character, ContinuityReport, Message, RiggedCharacter, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
 import { MessageItem } from "./MessageItem";
+import { StoryNavigator } from "./StoryNavigator";
+import { ActionMenu, MenuAction, MenuSeparator } from "./ActionMenu";
 import { StreamingBubble } from "./StreamingBubble";
 import { RigStage } from "./RigStage";
 import { SceneFX } from "../scenefx";
@@ -8,12 +10,15 @@ import { moodToEmoji, moodToColor } from "../mood";
 import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
-  IconStop, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
-  IconSparkles, IconBrain, IconShield,
+  IconStop, IconVolume, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
+  IconSparkles, IconBrain, IconShield, IconThreads,
+  IconSearch, IconChevronDown, IconMoreH,
 } from "./Icons";
 
 interface ConversationPanelProps {
   conversationHistory: Message[];
+  /** Increments when a saved/imported story replaces the current transcript. */
+  historyRevision: number;
   userName: string;
   assistantName: string;
   showLeftPanel: boolean;
@@ -46,6 +51,7 @@ interface ConversationPanelProps {
   scene: SceneState;
   fxEnabled: boolean;
   /** Story memory — how many older messages the model's record stands in for. */
+  memoryEnabled: boolean;
   memoryCovered: number;
   memoryBusy: boolean;
   /** Continuity Guard — the canon's size, whether it is on, and any open conflict. */
@@ -53,6 +59,11 @@ interface ConversationPanelProps {
   continuityEnabled: boolean;
   continuityBusy: boolean;
   continuityReports: ContinuityReport[];
+  /** Dramatic tracker — unresolved threads are surfaced as a calm count, not an alert. */
+  activeThreadCount: number;
+  pinnedThreadCount: number;
+  threadsEnabled: boolean;
+  threadsBusy: boolean;
   theme: Theme;
   onToggleImmersive: () => void;
   onToggleFormatting: (enabled: boolean) => void;
@@ -72,18 +83,20 @@ interface ConversationPanelProps {
   onDeleteMessage: (index: number) => void;
   onRewindToMessage: (index: number) => void;
   onResendMessage: () => void;
-  onRegenerateResponse: (index: number) => void;
   onSwipe: (index: number, direction: "left" | "right") => void;
   onPlayMessage: (text: string, index: number) => void;
+  onToggleBookmark: (index: number) => void;
   onEditingTextChange: (text: string) => void;
   onShowLorebook: () => void;
   onShowMemory: () => void;
   onShowCanon: () => void;
+  onShowThreads: () => void;
   onResolveContinuity: (action: "reroll" | "accept" | "dismiss") => void;
 }
 
 export function ConversationPanel({
   conversationHistory,
+  historyRevision,
   userName,
   assistantName,
   showLeftPanel,
@@ -112,12 +125,17 @@ export function ConversationPanel({
   immersive,
   scene,
   fxEnabled,
+  memoryEnabled,
   memoryCovered,
   memoryBusy,
   canonSize,
   continuityEnabled,
   continuityBusy,
   continuityReports,
+  activeThreadCount,
+  pinnedThreadCount,
+  threadsEnabled,
+  threadsBusy,
   theme,
   onToggleImmersive,
   onToggleFormatting,
@@ -137,26 +155,202 @@ export function ConversationPanel({
   onDeleteMessage,
   onRewindToMessage,
   onResendMessage,
-  onRegenerateResponse,
   onSwipe,
   onPlayMessage,
+  onToggleBookmark,
   onEditingTextChange,
   onShowLorebook,
   onShowMemory,
   onShowCanon,
+  onShowThreads,
   onResolveContinuity
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const messageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const historyScrollRef = useRef<{ length: number; tail: string; revision: number } | null>(null);
+  const jumpTimerRef = useRef<number | null>(null);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const followSuspendedUntilRef = useRef(0);
+  const navigatorOpenerRef = useRef<HTMLElement | null>(null);
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+  const [jumpTargetIndex, setJumpTargetIndex] = useState<number | null>(null);
+  const [autoFollow, setAutoFollow] = useState(true);
+  const bookmarkCount = conversationHistory.filter((message) => message.bookmarked).length;
 
-  // Auto-scroll to bottom when new messages arrive or the reply streams in
-  useEffect(() => {
+  const openNavigator = () => {
+    if (navigatorOpen) {
+      const search = document.querySelector<HTMLInputElement>('[aria-label="Search this story"]');
+      search?.focus();
+      search?.select();
+      return;
+    }
+    // Do not stack this dialog behind another modal.
+    if (document.querySelector(".modal-scrim")) return;
+    navigatorOpenerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setNavigatorOpen(true);
+  };
+
+  const closeNavigator = () => {
+    setNavigatorOpen(false);
+    window.requestAnimationFrame(() => navigatorOpenerRef.current?.focus());
+  };
+
+  const scrollToLatest = () => {
+    programmaticScrollRef.current = true;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversationHistory, streamingText, isStreaming]);
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollTimerRef.current = null;
+    }, 500);
+  };
+
+  // Auto-scroll for actual story progress, but stay put when someone bookmarks
+  // or navigates into an older passage. Scrolling back near the bottom resumes
+  // live following; loading a different story always starts at its latest turn.
+  useEffect(() => {
+    const tailMessage = conversationHistory[conversationHistory.length - 1];
+    const tail = tailMessage
+      ? [
+          new Date(tailMessage.timestamp).getTime(),
+          tailMessage.role,
+          tailMessage.speaker || "",
+          tailMessage.content,
+          tailMessage.image
+            ? `${tailMessage.image.length}:${tailMessage.image.slice(-24)}`
+            : "",
+        ].join("|")
+      : "";
+    const previous = historyScrollRef.current;
+    const storyReplaced = previous === null || previous.revision !== historyRevision;
+    const storyAdvanced = previous === null
+      || conversationHistory.length > previous.length
+      || (conversationHistory.length >= previous.length && tail !== previous.tail);
+
+    const storyCleared = previous !== null
+      && previous.length > 0
+      && conversationHistory.length === 0;
+
+    if (storyReplaced || storyCleared) {
+      setAutoFollow(true);
+      if (conversationHistory.length > 0) scrollToLatest();
+    } else if (autoFollow && (storyAdvanced || isStreaming)) {
+      scrollToLatest();
+    }
+    historyScrollRef.current = { length: conversationHistory.length, tail, revision: historyRevision };
+  }, [conversationHistory, historyRevision, streamingText, isStreaming, autoFollow]);
+
+  const handleStoryScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (Date.now() < followSuspendedUntilRef.current) {
+      setAutoFollow(false);
+      return;
+    }
+    if (programmaticScrollRef.current) return;
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 96;
+    setAutoFollow((current) => current === nearBottom ? current : nearBottom);
+  };
+
+  const handleManualScrollIntent = () => {
+    programmaticScrollRef.current = false;
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyboardScrollIntent = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.altKey
+        || event.ctrlKey
+        || event.metaKey
+        || !["ArrowUp", "PageUp", "Home"].includes(event.key)
+        || document.querySelector(".modal-scrim")
+      ) {
+        return;
+      }
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (
+        target?.matches("input, textarea, select")
+        || target?.isContentEditable
+        || target?.closest(".action-menu-panel")
+      ) {
+        return;
+      }
+      followSuspendedUntilRef.current = Date.now() + 300;
+      handleManualScrollIntent();
+      setAutoFollow(false);
+    };
+    window.addEventListener("keydown", handleKeyboardScrollIntent);
+    return () => window.removeEventListener("keydown", handleKeyboardScrollIntent);
+    // The handler only touches stable state setters and refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const jumpToLatest = () => {
+    followSuspendedUntilRef.current = 0;
+    setAutoFollow(true);
+    scrollToLatest();
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (
+        conversationHistory.length > 0
+        && (event.ctrlKey || event.metaKey)
+        && event.key.toLowerCase() === "f"
+      ) {
+        if (!navigatorOpen && document.querySelector(".modal-scrim")) return;
+        event.preventDefault();
+        openNavigator();
+      } else if (navigatorOpen && event.key === "Escape") {
+        event.preventDefault();
+        closeNavigator();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+    // openNavigator/closeNavigator intentionally follow the latest render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationHistory.length, navigatorOpen]);
+
+  useEffect(() => () => {
+    if (jumpTimerRef.current !== null) window.clearTimeout(jumpTimerRef.current);
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+  }, []);
+
+  const jumpToMessage = (index: number) => {
+    setNavigatorOpen(false);
+    followSuspendedUntilRef.current = Date.now() + 900;
+    handleManualScrollIntent();
+    setAutoFollow(false);
+    setJumpTargetIndex(index);
+    window.requestAnimationFrame(() => {
+      const destination = messageRefs.current[index];
+      destination?.scrollIntoView({ behavior: "smooth", block: "center" });
+      destination?.focus({ preventScroll: true });
+    });
+    if (jumpTimerRef.current !== null) window.clearTimeout(jumpTimerRef.current);
+    jumpTimerRef.current = window.setTimeout(() => {
+      setJumpTargetIndex(null);
+      jumpTimerRef.current = null;
+    }, 2200);
+  };
 
   return (
     <>
       {/* Title bar — the story's marquee */}
-      <div style={{
+      <div className="conversation-titlebar" style={{
         padding: "10px 20px",
         borderBottom: `1px solid ${theme.colors.border}`,
         background: theme.colors.surface,
@@ -173,7 +367,7 @@ export function ConversationPanel({
           <IconPanelLeft size={16} />
         </button>
 
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flex: 1 }}>
+        <div className="conversation-title-copy" style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flex: 1 }}>
           <h1 style={{
             margin: 0,
             fontSize: 15.5,
@@ -191,7 +385,7 @@ export function ConversationPanel({
           {assistantMood && (
             <span
               title={`${assistantName} feels ${assistantMood}`}
-              className="fade-up"
+              className="fade-up conversation-mood"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -211,148 +405,270 @@ export function ConversationPanel({
             </span>
           )}
 
-          <span className="meta-mono" style={{ whiteSpace: "nowrap" }}>
+          <span className="meta-mono conversation-message-count" style={{ whiteSpace: "nowrap" }}>
             {conversationHistory.length} messages
           </span>
         </div>
 
-        {/* Voice pickers (voice output only) */}
-        {outputMode === "voice" && (
-          <>
-            <select
-              className="input"
-              value={ttsEngine}
-              onChange={(e) => onTtsEngineChange(e.target.value as TtsEngine)}
-              disabled={!connected}
-              title="Speech engine"
-              style={{ fontSize: 11.5, padding: "4px 8px" }}
+        <div className="toolbar-action-cluster">
+          {/* Search stays one click away; everything else is grouped by intent. */}
+          <button
+            className="icon-btn"
+            data-active={navigatorOpen}
+            disabled={conversationHistory.length === 0}
+            onClick={openNavigator}
+            title={
+              bookmarkCount > 0
+                ? `Story navigator — search or browse ${bookmarkCount} bookmarked ${bookmarkCount === 1 ? "moment" : "moments"} (Ctrl/Cmd+F)`
+                : "Story navigator — search and bookmark moments (Ctrl/Cmd+F)"
+            }
+            aria-label="Open Story navigator"
+          >
+            <IconSearch size={16} />
+          </button>
+
+          <ActionMenu
+            label="Story"
+            icon={<IconBookOpen size={15} />}
+            active={continuityReports.length > 0}
+            panelWidth={310}
+            title="Story tools, memory, canon, and settings"
+          >
+            {(closeMenu) => (
+              <>
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconThreads size={15} className={threadsBusy ? "spin" : undefined} />}
+                  label={threadsBusy ? "Finding story threads…" : "Story threads"}
+                  status={threadsEnabled}
+                  description={
+                    threadsBusy
+                      ? "Reading the latest turns for what remains unresolved"
+                      : !threadsEnabled
+                        ? `Tracking is off · ${activeThreadCount} still in play`
+                        : activeThreadCount > 0
+                          ? `${activeThreadCount} in play${pinnedThreadCount > 0 ? ` · ${pinnedThreadCount} pinned` : ""}`
+                          : "Promises, mysteries, goals, and tensions"
+                  }
+                  trailing={activeThreadCount > 0 ? activeThreadCount : undefined}
+                  restoreFocusOnClose={false}
+                  onSelect={onShowThreads}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconBookOpen size={15} />}
+                  label="Lorebook"
+                  description="People, places, and world information"
+                  restoreFocusOnClose={false}
+                  onSelect={onShowLorebook}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconBrain size={15} className={memoryBusy ? "spin" : undefined} />}
+                  label={memoryBusy ? "Story memory — updating…" : "Story memory"}
+                  status={memoryEnabled}
+                  description={
+                    memoryCovered > 0
+                      ? `Remembering ${memoryCovered} earlier ${memoryCovered === 1 ? "message" : "messages"}`
+                      : "Review the long-term record of this story"
+                  }
+                  trailing={memoryCovered > 0 ? memoryCovered : undefined}
+                  restoreFocusOnClose={false}
+                  onSelect={onShowMemory}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconShield size={15} className={continuityBusy ? "spin" : undefined} />}
+                  label={continuityReports.length > 0 ? "Continuity needs attention" : "Story canon"}
+                  status={continuityEnabled}
+                  description={
+                    continuityEnabled
+                      ? `${canonSize} established ${canonSize === 1 ? "fact" : "facts"} guarded`
+                      : "Catch contradictions in established facts"
+                  }
+                  trailing={continuityReports.length > 0 ? continuityReports.length : undefined}
+                  restoreFocusOnClose={false}
+                  onSelect={onShowCanon}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconSliders size={15} />}
+                  label="Story settings"
+                  description="Scenario, system prompt, and author's note"
+                  restoreFocusOnClose={false}
+                  onSelect={onShowSettings}
+                />
+              </>
+            )}
+          </ActionMenu>
+
+          <ActionMenu
+            label="View"
+            icon={<IconFilm size={15} />}
+            active={immersive}
+            panelWidth={310}
+            title="Stage and reading options"
+          >
+            {(closeMenu) => (
+              <>
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconSparkles size={15} />}
+                  label="Animated stage"
+                  description="Show character rigs and acting cues"
+                  active={stageEnabled}
+                  closeOnSelect={false}
+                  onSelect={() => onToggleStage(!stageEnabled)}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconItalic size={15} />}
+                  label="Rich prose formatting"
+                  description="Style actions and dialogue as story prose"
+                  active={formattingEnabled}
+                  closeOnSelect={false}
+                  onSelect={() => onToggleFormatting(!formattingEnabled)}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconFilm size={15} />}
+                  label="Cinematic reading"
+                  description="Focused book typography and living backdrop"
+                  active={immersive}
+                  closeOnSelect={false}
+                  onSelect={onToggleImmersive}
+                />
+              </>
+            )}
+          </ActionMenu>
+
+          {outputMode === "voice" && (
+            <ActionMenu
+              label="Voice"
+              icon={<IconVolume size={15} />}
+              panelRole="dialog"
+              panelWidth={300}
+              active={playingMessageIndex !== null}
+              title="Speech engine, voice, and playback"
             >
-              <option value="piper">Piper</option>
-              <option value="chatterbox">Chatterbox</option>
-              <option value="soprano">Soprano</option>
-            </select>
-            <select
-              className="input"
-              value={currentVoice}
-              onChange={(e) => onVoiceChange(e.target.value)}
-              disabled={!connected}
-              title="Voice"
-              style={{ fontSize: 11.5, padding: "4px 8px", maxWidth: 150 }}
-            >
-              {availableVoices.map(v => (
-                <option key={v.name} value={v.name}>
-                  {v.name.length > 22 ? v.name.substring(0, 20) + '…' : v.name}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
+              {(closeMenu) => (
+                <>
+                  <div className="action-menu-section">
+                    <div className="action-menu-field">
+                      <label className="label-caps" htmlFor="toolbar-tts-engine">Speech engine</label>
+                      <select
+                        id="toolbar-tts-engine"
+                        className="input"
+                        value={ttsEngine}
+                        onChange={(event) => onTtsEngineChange(event.target.value as TtsEngine)}
+                        disabled={!connected}
+                      >
+                        <option value="piper">Piper</option>
+                        <option value="chatterbox">Chatterbox</option>
+                        <option value="soprano">Soprano</option>
+                      </select>
+                    </div>
+                    <div className="action-menu-field">
+                      <label className="label-caps" htmlFor="toolbar-voice">Voice</label>
+                      <select
+                        id="toolbar-voice"
+                        className="input"
+                        value={currentVoice}
+                        onChange={(event) => onVoiceChange(event.target.value)}
+                        disabled={!connected}
+                      >
+                        {availableVoices.map((voice) => (
+                          <option key={voice.name} value={voice.name}>{voice.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="action-menu-section">
+                    <button
+                      type="button"
+                      className="action-menu-item danger"
+                      disabled={!connected}
+                      onClick={() => {
+                        onStopAudio();
+                        closeMenu();
+                      }}
+                    >
+                      <span className="action-menu-item-icon"><IconStop size={15} /></span>
+                      <span className="action-menu-item-copy">
+                        <span className="action-menu-item-label">Stop audio</span>
+                        <span className="action-menu-item-description">End current speech playback</span>
+                      </span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </ActionMenu>
+          )}
 
-        {/* Mode toggles */}
-        <button
-          className="icon-btn"
-          data-active={useContext}
-          disabled={!connected}
-          onClick={() => onToggleContext(!useContext)}
-          title={useContext ? "Story memory on — the model sees the whole conversation" : "Story memory off — each message stands alone"}
-        >
-          <IconMessage size={16} />
-        </button>
-        <button
-          className="icon-btn"
-          data-active={includeImageGen}
-          disabled={!connected}
-          onClick={() => onToggleImageGen(!includeImageGen)}
-          title={includeImageGen ? "Image generation on — the character may send images" : "Image generation off"}
-        >
-          <IconImage size={16} />
-        </button>
-        <button
-          className="icon-btn"
-          data-active={stageEnabled}
-          onClick={() => onToggleStage(!stageEnabled)}
-          title={stageEnabled ? "Animated stage on — the model may send hidden rig motion cues" : "Animated stage off — hide the rig and stop motion cues"}
-        >
-          <IconSparkles size={16} />
-        </button>
-        <button
-          className="icon-btn"
-          data-active={formattingEnabled}
-          onClick={() => onToggleFormatting(!formattingEnabled)}
-          title={formattingEnabled ? "Rich prose formatting on (*actions*, \"dialogue\")" : "Rich prose formatting off"}
-        >
-          <IconItalic size={16} />
-        </button>
+          <ActionMenu
+            label="More"
+            icon={<IconMoreH size={15} />}
+            panelWidth={310}
+            title="Conversation and media options"
+          >
+            {(closeMenu) => (
+              <>
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconMessage size={15} />}
+                  label="Conversation context"
+                  description="Let the model see earlier messages"
+                  active={useContext}
+                  disabled={!connected}
+                  closeOnSelect={false}
+                  onSelect={() => onToggleContext(!useContext)}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconImage size={15} />}
+                  label="Image generation"
+                  description="Allow the character to create images"
+                  active={includeImageGen}
+                  disabled={!connected}
+                  closeOnSelect={false}
+                  onSelect={() => onToggleImageGen(!includeImageGen)}
+                />
+                <MenuSeparator />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconEraser size={15} />}
+                  label="Clear conversation"
+                  description="Remove every message from the current story"
+                  danger
+                  disabled={!connected || conversationHistory.length === 0}
+                  onSelect={onClearChat}
+                />
+              </>
+            )}
+          </ActionMenu>
 
-        <div style={{ width: 1, height: 20, background: theme.colors.border, margin: "0 2px" }} />
-
-        <button className="icon-btn" onClick={onShowLorebook} title="Lorebook / world info">
-          <IconBookOpen size={16} />
-        </button>
-        {/* Story memory — lit once the record is standing in for older messages,
-            so you can see at a glance that the story is being remembered. */}
-        <button
-          className="icon-btn"
-          data-active={memoryCovered > 0}
-          onClick={onShowMemory}
-          title={
-            memoryBusy
-              ? "Story memory — writing the story so far…"
-              : memoryCovered > 0
-                ? `Story memory — remembering ${memoryCovered} earlier ${memoryCovered === 1 ? "message" : "messages"}`
-                : "Story memory — long-term recall for a story that outgrows the context window"
-          }
-        >
-          <IconBrain size={16} className={memoryBusy ? "spin" : undefined} />
-        </button>
-        {/* Continuity Guard — quiet while the story holds together, and lit in
-            warning the moment a reply contradicts something it established. */}
-        <button
-          className="icon-btn"
-          data-active={continuityEnabled && continuityReports.length === 0}
-          onClick={onShowCanon}
-          title={
-            continuityReports.length > 0
-              ? "Continuity — the latest reply breaks something the story established"
-              : continuityBusy
-                ? "Continuity — checking the latest reply…"
-                : continuityEnabled
-                  ? `Story canon — holding the story to ${canonSize} established ${canonSize === 1 ? "fact" : "facts"}`
-                  : "Continuity guard — catch the story contradicting itself"
-          }
-          style={continuityReports.length > 0 ? { color: theme.colors.warning } : undefined}
-        >
-          <IconShield size={16} className={continuityBusy ? "spin" : undefined} />
-        </button>
-        <button className="icon-btn" onClick={onShowSettings} title="Story & system (global prompt, scenario, author's note)">
-          <IconSliders size={16} />
-        </button>
-        <button className="icon-btn danger" disabled={!connected} onClick={onClearChat} title="Clear the conversation">
-          <IconEraser size={16} />
-        </button>
-        <button className="icon-btn danger" disabled={!connected} onClick={onStopAudio} title="Stop audio">
-          <IconStop size={16} />
-        </button>
-
-        <div style={{ width: 1, height: 20, background: theme.colors.border, margin: "0 2px" }} />
-
-        <button
-          className="icon-btn"
-          data-active={immersive}
-          onClick={onToggleImmersive}
-          title={immersive ? "Exit cinematic reading mode" : "Cinematic reading mode — focused view, book prose, living backdrop"}
-        >
-          <IconFilm size={16} />
-        </button>
-        <button
-          className="icon-btn"
-          data-active={showRealtimePanel}
-          onClick={onToggleRealtimePanel}
-          title={showRealtimePanel ? "Hide voice & status panel" : "Show voice & status panel"}
-        >
-          <IconPanelRight size={16} />
-        </button>
+          <button
+            className="icon-btn"
+            data-active={showRealtimePanel}
+            onClick={onToggleRealtimePanel}
+            title={showRealtimePanel ? "Hide voice & status panel" : "Show voice & status panel"}
+            aria-label={showRealtimePanel ? "Hide voice and status panel" : "Show voice and status panel"}
+          >
+            <IconPanelRight size={16} />
+          </button>
+        </div>
       </div>
+
+      <StoryNavigator
+        show={navigatorOpen}
+        messages={conversationHistory}
+        userName={userName}
+        assistantName={assistantName}
+        theme={theme}
+        onClose={closeNavigator}
+        onJump={jumpToMessage}
+        onToggleBookmark={onToggleBookmark}
+      />
 
       {/* The stage — scene light, weather, and the story itself */}
       <div style={{
@@ -382,7 +698,15 @@ export function ConversationPanel({
             theme={theme}
           />
         )}
-        <div style={{
+        <div
+          ref={scrollContainerRef}
+          role="region"
+          aria-label="Story transcript"
+          tabIndex={0}
+          onScroll={handleStoryScroll}
+          onWheel={handleManualScrollIntent}
+          onPointerDown={handleManualScrollIntent}
+          style={{
           position: "relative",
           zIndex: 1,
           height: "100%",
@@ -426,38 +750,45 @@ export function ConversationPanel({
         ) : (
           <>
             {conversationHistory.map((msg, idx) => (
-              <MessageItem
+              <div
                 key={idx}
-                message={msg}
-                index={idx}
-                userName={userName}
-                assistantName={assistantName}
-                isLast={idx === conversationHistory.length - 1}
-                conversationLength={conversationHistory.length}
-                playingMessageIndex={playingMessageIndex}
-                editingMessage={editingMessage}
-                userCharacterImage={userCharacterImage}
-                assistantCharacterImage={assistantCharacterImage}
-                formattingEnabled={formattingEnabled}
-                immersive={immersive}
-                continuityReports={
-                  idx === conversationHistory.length - 1 && msg.role === "assistant"
-                    ? continuityReports
-                    : undefined
-                }
-                theme={theme}
-                onResolveContinuity={onResolveContinuity}
-                onEdit={onEditMessage}
-                onSaveEdit={onSaveEdit}
-                onCancelEdit={onCancelEdit}
-                onDelete={onDeleteMessage}
-                onRewind={onRewindToMessage}
-                onResend={onResendMessage}
-                onRegenerate={onRegenerateResponse}
-                onSwipe={onSwipe}
-                onPlay={onPlayMessage}
-                onEditingTextChange={onEditingTextChange}
-              />
+                ref={(node) => { messageRefs.current[idx] = node; }}
+                className="story-message-anchor"
+                data-jump-target={jumpTargetIndex === idx}
+                tabIndex={-1}
+              >
+                <MessageItem
+                  message={msg}
+                  index={idx}
+                  userName={userName}
+                  assistantName={assistantName}
+                  isLast={idx === conversationHistory.length - 1}
+                  conversationLength={conversationHistory.length}
+                  playingMessageIndex={playingMessageIndex}
+                  editingMessage={editingMessage}
+                  userCharacterImage={userCharacterImage}
+                  assistantCharacterImage={assistantCharacterImage}
+                  formattingEnabled={formattingEnabled}
+                  immersive={immersive}
+                  continuityReports={
+                    idx === conversationHistory.length - 1 && msg.role === "assistant"
+                      ? continuityReports
+                      : undefined
+                  }
+                  theme={theme}
+                  onResolveContinuity={onResolveContinuity}
+                  onEdit={onEditMessage}
+                  onSaveEdit={onSaveEdit}
+                  onCancelEdit={onCancelEdit}
+                  onDelete={onDeleteMessage}
+                  onRewind={onRewindToMessage}
+                  onResend={onResendMessage}
+                  onSwipe={onSwipe}
+                  onPlay={onPlayMessage}
+                  onToggleBookmark={onToggleBookmark}
+                  onEditingTextChange={onEditingTextChange}
+                />
+              </div>
             ))}
             {isStreaming && (
               <StreamingBubble
@@ -475,6 +806,17 @@ export function ConversationPanel({
         )}
         </div>
         </div>
+        {!autoFollow && conversationHistory.length > 0 && (
+          <button
+            type="button"
+            className="chip story-jump-latest"
+            onClick={jumpToLatest}
+            title="Return to the latest message and resume live scrolling"
+          >
+            <IconChevronDown size={14} />
+            Latest
+          </button>
+        )}
       </div>
     </>
   );

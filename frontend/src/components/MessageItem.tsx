@@ -5,7 +5,7 @@ import { moodToEmoji, moodToColor } from "../mood";
 import {
   IconVolume, IconStop, IconPencil, IconTrash, IconRewind, IconRefresh,
   IconSend, IconChevronLeft, IconChevronRight, IconPlus, IconCheck, IconX,
-  IconAlert, IconShield,
+  IconAlert, IconShield, IconBookmark,
 } from "./Icons";
 
 interface MessageItemProps {
@@ -31,9 +31,9 @@ interface MessageItemProps {
   onDelete: (index: number) => void;
   onRewind: (index: number) => void;
   onResend: () => void;
-  onRegenerate: (index: number) => void;
   onSwipe: (index: number, direction: "left" | "right") => void;
   onPlay: (text: string, index: number) => void;
+  onToggleBookmark: (index: number) => void;
   onEditingTextChange: (text: string) => void;
 }
 
@@ -103,9 +103,9 @@ export function MessageItem({
   onDelete,
   onRewind,
   onResend,
-  onRegenerate,
   onSwipe,
   onPlay,
+  onToggleBookmark,
   onEditingTextChange
 }: MessageItemProps) {
   const isEditing = editingMessage?.index === index;
@@ -133,12 +133,40 @@ export function MessageItem({
             message.content
           )}
         </div>
-        <div className="msg-actions" style={{ marginTop: 4, display: "flex", gap: 2, justifyContent: "center" }}>
-          <button className="icon-btn sm" onClick={() => onEdit(index)} title="Edit narration"><IconPencil size={13} /></button>
-          <button className="icon-btn sm danger" onClick={() => onDelete(index)} title="Remove narration"><IconTrash size={13} /></button>
+        <div className="message-action-row" style={{ justifyContent: "center" }}>
+          <button
+            className="icon-btn sm msg-bookmark"
+            data-active={message.bookmarked === true}
+            aria-pressed={message.bookmarked === true}
+            onClick={() => onToggleBookmark(index)}
+            title={message.bookmarked ? "Remove bookmark" : "Bookmark this moment"}
+            aria-label={message.bookmarked ? "Remove bookmark from this narration" : "Bookmark this narration"}
+          >
+            <IconBookmark size={13} />
+          </button>
+          <button
+            className="btn btn-quiet message-action-button"
+            onClick={() => onEdit(index)}
+            title="Edit narration"
+          >
+            <IconPencil size={12} /> Edit
+          </button>
           {index < conversationLength - 1 && (
-            <button className="icon-btn sm" onClick={() => onRewind(index)} title="Rewind the story to here"><IconRewind size={13} /></button>
+            <button
+              className="btn btn-quiet message-action-button"
+              onClick={() => onRewind(index)}
+              title="Remove everything after this narration"
+            >
+              <IconRewind size={12} />
+            </button>
           )}
+          <button
+            className="btn btn-quiet message-action-button danger"
+            onClick={() => onDelete(index)}
+            title="Remove narration"
+          >
+            <IconTrash size={12} /> Remove
+          </button>
         </div>
       </div>
     );
@@ -385,14 +413,11 @@ export function MessageItem({
               </div>
             )}
 
-            {/* Swipes + actions on one quiet row, revealed on hover */}
-            <div style={{
-              marginTop: 3,
-              display: "flex",
-              alignItems: "center",
-              gap: 2,
-              flexDirection: isUser ? "row-reverse" : "row",
-            }}>
+            {/* Common message actions stay visible and one click away. */}
+            <div
+              className="message-action-row"
+              style={{ justifyContent: isUser ? "flex-end" : "flex-start" }}
+            >
               {/* Swipe navigation — browse / generate alternative takes */}
               {showSwipes && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 2, marginRight: 6 }}>
@@ -417,8 +442,19 @@ export function MessageItem({
                 </span>
               )}
 
-              <span className="msg-actions" style={{ display: "inline-flex", gap: 2 }}>
-                {message.role === "assistant" && (
+              <button
+                className="icon-btn sm msg-bookmark"
+                data-active={message.bookmarked === true}
+                aria-pressed={message.bookmarked === true}
+                onClick={() => onToggleBookmark(index)}
+                title={message.bookmarked ? "Remove bookmark" : "Bookmark this moment"}
+                aria-label={message.bookmarked ? "Remove bookmark from this message" : "Bookmark this message"}
+              >
+                <IconBookmark size={13} />
+              </button>
+
+              {message.role === "assistant" && (
+                <span className="msg-actions" style={{ display: "inline-flex" }}>
                   <button
                     className="icon-btn sm"
                     onClick={() => onPlay(message.content, index)}
@@ -427,37 +463,41 @@ export function MessageItem({
                   >
                     {playingMessageIndex === index ? <IconStop size={13} /> : <IconVolume size={13} />}
                   </button>
-                )}
-                <button className="icon-btn sm" onClick={() => onEdit(index)} title="Edit message">
-                  <IconPencil size={13} />
+                </span>
+              )}
+
+              <button
+                className="btn btn-quiet message-action-button"
+                onClick={() => onEdit(index)}
+                title="Edit message"
+              >
+                <IconPencil size={12} />
+              </button>
+              {isUser && isLast && (
+                <button
+                  className="btn btn-quiet message-action-button"
+                  onClick={onResend}
+                  title="Send this message again"
+                >
+                  <IconSend size={12} />
                 </button>
-                <button className="icon-btn sm danger" onClick={() => onDelete(index)} title="Remove message">
-                  <IconTrash size={13} />
+              )}
+              {index < conversationLength - 1 && (
+                <button
+                  className="btn btn-quiet message-action-button"
+                  onClick={() => onRewind(index)}
+                  title="Remove everything after this message"
+                >
+                  <IconRewind size={12} />
                 </button>
-                {index < conversationLength - 1 && (
-                  <button
-                    className="icon-btn sm"
-                    onClick={() => onRewind(index)}
-                    title="Rewind the story to this message"
-                  >
-                    <IconRewind size={13} />
-                  </button>
-                )}
-                {isUser && isLast && (
-                  <button className="icon-btn sm" onClick={onResend} title="Resend this message">
-                    <IconSend size={13} />
-                  </button>
-                )}
-                {message.role === "assistant" && isLast && (
-                  <button
-                    className="icon-btn sm"
-                    onClick={() => onRegenerate(index)}
-                    title="Regenerate (keeps this take as a swipe)"
-                  >
-                    <IconRefresh size={13} />
-                  </button>
-                )}
-              </span>
+              )}
+              <button
+                className="btn btn-quiet message-action-button danger"
+                onClick={() => onDelete(index)}
+                title="Remove message"
+              >
+                <IconTrash size={12} />
+              </button>
             </div>
           </div>
         )}

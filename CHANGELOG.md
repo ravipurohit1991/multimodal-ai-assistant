@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Story threads** — an evidence-backed dramatic ledger now follows the promises,
+  mysteries, goals, threats, secrets, and relationship tensions that remain in play.
+  It is deliberately separate from canon: threads are possibilities rather than facts,
+  only a small prioritized set reaches reply generation, and the prompt forbids forced
+  payoffs or taking agency from the user. The tracker updates after completed replies,
+  can catch up on uncovered turns or rebuild from the full transcript, and fails closed
+  when a model cannot support a change with words from the new passage. A searchable
+  Story Threads workspace supports manual additions, editing, pinning, active/resolved/
+  dropped states, archive cleanup, and on/off or automatic-update controls. Stable IDs,
+  pins, status, and the coverage cursor travel with saved sessions and reconnects.
+- **Story navigator** — long transcripts now have their own searchable index. Open it
+  from the story toolbar or with `Ctrl/Cmd+F`, search visible dialogue and narration,
+  filter by speaker type, and jump to any result with keyboard navigation. Any user,
+  character, or narrator message can be bookmarked from the transcript or the index;
+  bookmarks persist in browser history and saved sessions, remain visible in the
+  navigator, and are marked in Markdown exports.
 - **Continuity guard** — the story keeps a canon, and every reply is held to it. A
   ledger of durable facts (`src/aiassistant/continuity.py`) — eye colour, who holds the
   key, who is dead, what was promised — is injected into every turn so contradictions
@@ -54,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the backend in `assistant_end`.
 
 ### Changed
+- **Cleaner action navigation** — the story header now groups related controls into
+  Story, View, Voice, and More menus; message editing actions live behind one
+  consistent overflow menu; writing assists share a Writing help menu; and the cast
+  chip wall is now a compact speaker selector. Menus support Escape, arrow keys,
+  outside-click dismissal, focus return, narrow layouts, and touch-sized message
+  controls while frequent actions such as search, bookmarking, narration, and Send
+  remain directly available.
 - **Complete UI redesign** ("ink & limelight"): dark-first theme with an amber accent,
   bundled fonts (IBM Plex Sans for UI, Literata for story prose, Plex Mono for data),
   a consistent SVG icon set replacing emoji buttons, quiet hover-revealed message
