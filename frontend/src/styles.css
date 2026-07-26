@@ -969,6 +969,343 @@ select.input option {
   font-size: 11.5px;
 }
 
+/* Sightlines — who knows what. Structurally the story-threads workspace, with
+   one addition: every row carries the audience as a strip of toggles, because
+   the interesting part of an entry is who is being kept out of it. */
+.sightlines-modal {
+  width: 760px;
+  max-width: 94vw;
+  height: min(780px, 90vh);
+  max-height: 90vh;
+}
+.sightlines-header {
+  min-height: 64px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sightlines-heading {
+  flex: 1;
+  min-width: 0;
+}
+.sightlines-heading > div:first-child {
+  color: var(--text-1);
+  font-size: 15px;
+  font-weight: 600;
+}
+.sightlines-heading > div:last-child {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.sightlines-count {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.sightlines-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 16px;
+}
+.sightlines-settings {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 13px;
+}
+.sightlines-settings > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sightlines-settings > label[data-disabled='true'] {
+  opacity: 0.45;
+}
+.sightlines-settings > .meta-mono {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.sightlines-settings .btn {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11.5px;
+}
+.sightline-add {
+  margin-bottom: 13px;
+  padding: 11px;
+  border: 1px solid var(--border-light);
+  border-radius: 11px;
+  background: var(--field);
+}
+.sightline-add > .label-caps {
+  margin-bottom: 7px;
+}
+.sightline-add-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 7px;
+}
+.sightline-add .input {
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: 12.5px;
+}
+.sightline-add > .input {
+  width: 100%;
+  margin-top: 7px;
+}
+.sightlines-list-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  margin-bottom: 8px;
+}
+.sightlines-list-tools .seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sightlines-list-tools .seg button span {
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+.sightlines-search {
+  width: min(210px, 38%);
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--field);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+}
+.sightlines-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.sightlines-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 12px;
+}
+.sightlines-search input::placeholder {
+  color: var(--text-3);
+}
+.sightlines-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+.sightlines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sightline-row {
+  padding: 9px 10px 8px 7px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-3);
+  border-radius: 11px;
+  background: var(--field);
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+/* Something being withheld is the point of the feature; shared context is
+   ordinary, and reads as such. */
+.sightline-row[data-withheld='true'] {
+  border-left-color: var(--accent-2);
+}
+.sightline-row[data-pinned='true'] {
+  border-top-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  border-right-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+}
+.sightline-row:focus-within {
+  background: color-mix(in srgb, var(--field) 78%, var(--elevated));
+}
+.sightline-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.sightline-pin,
+.sightline-remove {
+  margin-top: 1px;
+}
+.sightline-copy {
+  flex: 1;
+  min-width: 0;
+}
+.sightline-topic-input,
+.sightline-text-input {
+  display: block;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: 0;
+  background: transparent;
+  color: var(--text-1);
+}
+.sightline-topic-input {
+  padding: 2px 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sightline-text-input {
+  margin-top: 2px;
+  padding: 3px 5px;
+  resize: vertical;
+  color: var(--text-2);
+  font-family: var(--font-prose);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.sightline-topic-input:hover:not(:disabled),
+.sightline-text-input:hover:not(:disabled) {
+  border-color: var(--border-light);
+}
+.sightline-topic-input:focus,
+.sightline-text-input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.sightline-topic-input:disabled,
+.sightline-text-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.sightline-topic-input::placeholder,
+.sightline-text-input::placeholder {
+  color: var(--text-3);
+}
+/* A secret the reader has not been let in on stays covered until they ask. */
+.sightline-spoiler {
+  width: 100%;
+  margin-top: 4px;
+  padding: 5px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-style: italic;
+  cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease;
+}
+.sightline-spoiler:hover {
+  border-color: var(--accent);
+  color: var(--text-2);
+}
+.sightline-audience {
+  min-height: 24px;
+  margin: 5px 29px 0 35px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sightline-add .sightline-audience {
+  margin: 8px 0 0;
+}
+.sightline-audience > .label-caps {
+  margin-right: 2px;
+}
+.sightline-knower {
+  min-height: 23px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+.sightline-knower[data-active='true'] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+.sightline-knower:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.sightline-knower:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.sightline-shared-note {
+  margin-left: auto;
+}
+.sightlines-empty {
+  min-height: 150px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-3);
+  text-align: center;
+}
+.sightlines-empty > div {
+  color: var(--text-2);
+  font-family: var(--font-prose);
+  font-size: 15px;
+  font-style: italic;
+}
+.sightlines-empty > span {
+  font-size: 11.5px;
+}
+.sightlines-footer {
+  min-height: 53px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.sightlines-footer .btn {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+
 /* Message entrance */
 .fade-up {
   animation: fade-up 0.24s ease both;
@@ -1224,6 +1561,24 @@ select.input option {
   .story-thread-add-fields {
     grid-template-columns: minmax(150px, 1fr) 125px auto;
   }
+  .sightlines-modal {
+    width: calc(100vw - 18px);
+    max-width: none;
+    height: min(820px, calc(100vh - 18px));
+    max-height: calc(100vh - 18px);
+  }
+  .sightlines-settings {
+    flex-wrap: wrap;
+  }
+  .sightlines-settings > .meta-mono {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+  }
+  .sightline-audience {
+    margin-left: 8px;
+    margin-right: 0;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1241,9 +1596,14 @@ select.input option {
     opacity: 1;
   }
   .story-thread-pin,
-  .story-thread-remove {
+  .story-thread-remove,
+  .sightline-pin,
+  .sightline-remove {
     width: 40px;
     height: 40px;
+  }
+  .sightline-knower {
+    min-height: 32px;
   }
   .story-thread-card-meta select {
     min-height: 40px;

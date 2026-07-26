@@ -19,4 +19,5 @@ export { CharacterManager } from "./CharacterManager";
 export { SessionsModal } from "./SessionsModal";
 export { StoryNavigator } from "./StoryNavigator";
 export { StoryThreadsModal } from "./StoryThreadsModal";
+export { SightlinesModal } from "./SightlinesModal";
 export { RigStage } from "./RigStage";

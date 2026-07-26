@@ -34,6 +34,10 @@ export type ServerMsg =
   | { type: "continuity_resolved"; action: string }
   | { type: "story_threads_updated"; threads: StoryThread[]; enabled: boolean; auto: boolean; covered: number; total: number; added?: number; unchanged?: boolean }
   | { type: "story_threads_status"; busy: boolean }
+  | { type: "sightlines_updated"; entries: SightlineEntry[]; enabled: boolean; auto: boolean; participants: string[]; covered: number; total: number; added?: number; unchanged?: boolean }
+  | { type: "sightlines_status"; busy: boolean }
+  | { type: "sightline_alert"; items: SightlineLeak[]; speaker?: string }
+  | { type: "sightline_resolved"; action: string }
   | { type: "wiped_all"; summary?: any }
   | { type: "error"; message: string };
 
@@ -297,6 +301,65 @@ export const DEFAULT_STORY_THREADS: StoryThreadsState = {
   enabled: true,
   auto: true,
   threads: [],
+  covered: 0,
+};
+
+/**
+ * Sightlines — who in this story knows what.
+ *
+ * Every other ledger here is global, which quietly makes each cast member
+ * omniscient. A sightline is scoped: it records something *and* the participants
+ * who are in on it, and the reply prompt is assembled for whoever is speaking.
+ */
+export interface SightlineEntry {
+  id: string;
+  /**
+   * A spoiler-free handle for this entry ("what happened to the wine"). It is
+   * the only part a character outside the audience is ever shown, so it must
+   * name the subject without giving it away.
+   */
+  topic: string;
+  /** What is actually known. Only ever shown to the audience. */
+  text: string;
+  /** Participants who know it. The user is the reserved `@user` token. */
+  knows: string[];
+  /** Pinned entries always reach the model and survive a rebuild. */
+  pinned: boolean;
+  /** Transcript message count when the entry was recorded. */
+  turn: number;
+}
+
+/** The human participant, as a rename-proof token rather than a display name. */
+export const SIGHTLINE_USER = "@user";
+
+/** One reported use of knowledge the speaker had no way of having. */
+export interface SightlineLeak {
+  entry_id: string;
+  /** The spoiler-free handle, for a reader who may not want the answer yet. */
+  topic: string;
+  /** What was actually withheld. Shown behind a reveal in the UI. */
+  text: string;
+  /** The words in the reply that used it. */
+  quote: string;
+  why: string;
+}
+
+export interface SightlinesState {
+  enabled: boolean;
+  /** Watch each reply for leaks. Costs one background pass, so it is opt-in. */
+  auto: boolean;
+  entries: SightlineEntry[];
+  /** Everyone whose knowledge can be tracked: the in-scene cast, plus `@user`. */
+  participants: string[];
+  /** Number of transcript messages already examined. */
+  covered: number;
+}
+
+export const DEFAULT_SIGHTLINES: SightlinesState = {
+  enabled: true,
+  auto: false,
+  entries: [],
+  participants: [],
   covered: 0,
 };
 

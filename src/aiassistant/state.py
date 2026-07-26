@@ -124,6 +124,25 @@ class ConnState:
     story_threads_covered: int = 0
     story_threads_task: asyncio.Task | None = None
 
+    # ----- Sightlines (who knows what) -----
+    # Every other ledger here is global, which quietly makes each cast member
+    # omniscient. This one is scoped: an entry records something *and* who is in
+    # on it, and the reply prompt is assembled for the character about to speak.
+    # Enabled by default because the preventive half is pure filtering and an
+    # empty ledger changes no prompt at all; the watching half (``auto``) costs a
+    # background pass per reply and is opt-in, like the Continuity Guard.
+    sightlines_enabled: bool = True
+    sightlines_auto: bool = False
+    sightlines: list[dict] = field(default_factory=list)
+    sightlines_covered: int = 0  # turns the ledger has been read against
+    sightline_alert: dict | None = None  # the unresolved leak, if any
+    sightline_note: str = ""  # one-shot correction armed for a reroll
+    sightlines_task: asyncio.Task | None = None
+    # The in-scene cast, as the browser last reported it. The roster itself lives
+    # in the frontend; the backend needs only the names, so it can tell who is
+    # being kept out of what.
+    cast: list[str] = field(default_factory=list)
+
     # Local models generally serialize work internally and can run out of memory
     # when several auxiliary passes arrive together. WebSocket orchestration uses
     # this per-connection lock to serialize memory, continuity, and thread upkeep
@@ -184,6 +203,17 @@ async def cancel_story_threads(state: ConnState):
     state.story_threads_task = None
 
 
+async def cancel_sightlines(state: ConnState):
+    """Cancel an in-flight Sightlines pass without touching other work."""
+    if state.sightlines_task and not state.sightlines_task.done():
+        state.sightlines_task.cancel()
+        try:
+            await state.sightlines_task
+        except asyncio.CancelledError:
+            pass
+    state.sightlines_task = None
+
+
 async def wipe_connection_state(state: ConnState) -> None:
     """Return every per-connection field to the same state as a fresh socket.
 
@@ -199,6 +229,7 @@ async def wipe_connection_state(state: ConnState) -> None:
     await cancel_memory(state)
     await cancel_continuity(state)
     await cancel_story_threads(state)
+    await cancel_sightlines(state)
 
     fresh = ConnState()
     for state_field in fields(ConnState):
