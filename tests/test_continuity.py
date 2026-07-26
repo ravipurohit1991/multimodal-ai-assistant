@@ -104,10 +104,12 @@ def test_a_correction_rides_last_so_the_retry_cannot_miss_it():
 
     messages = build_llm_messages(state)
 
-    corrections = [i for i, m in enumerate(messages) if "Continuity correction" in m["content"]]
-    styles = [i for i, m in enumerate(messages) if "Scene direction" in m["content"]]
-    assert len(corrections) == 1
-    assert corrections[0] > styles[0]
+    # One steering message now carries both, and the correction comes after the
+    # dials inside it: the model has just proved that reading the canon once was
+    # not enough, so the correction is the later of the two.
+    steering = [m["content"] for m in messages if "Continuity correction" in m["content"]]
+    assert len(steering) == 1
+    assert steering[0].index("Scene direction") < steering[0].index("Continuity correction")
 
 
 def test_the_prompt_carries_pinned_facts_even_when_the_ledger_is_long():

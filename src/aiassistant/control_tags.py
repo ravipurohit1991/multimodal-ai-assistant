@@ -424,3 +424,83 @@ async def generate_animation_directive_from_reply(
     directive = parse_animation_tag(body)
     useful = any(k in directive for k in ("pose", "motion", "gesture", "posture", "emotion"))
     return directive if useful else None
+
+
+# ----- Speaker prefixes ---------------------------------------------------
+# In a group scene the backend stores each reply as "Mira: ..." so that next turn
+# the model can tell who said what. The cost is that the model then sees its own
+# past replies labelled and copies the pattern, opening a fresh reply with its own
+# name. Left alone that reaches the transcript as "Mira: Mira: *she turns*", which
+# is the kind of small wrongness that makes a long story feel broken.
+#
+# Only a bare label at the very start of the reply is removed, and only when it
+# names someone in the scene, so a line of dialogue that happens to begin with a
+# name ("Mira, don't") and narration about another character are both left alone.
+_SPEAKER_PREFIX_RE = re.compile(r"^\s*([^\n:*\"'\[]{1,40}?)\s*:\s*")
+
+
+def strip_speaker_prefix(text: str, names: list[str] | None = None) -> str:
+    """Drop a leading ``Name:`` label the model copied from the stored history."""
+    if not text:
+        return text
+    match = _SPEAKER_PREFIX_RE.match(text)
+    if not match:
+        return text
+    label = match.group(1).strip().casefold()
+    if not label:
+        return text
+    known = {
+        str(name).strip().casefold()
+        for name in (names or [])
+        if str(name or "").strip()
+    }
+    if label not in known:
+        return text
+    return text[match.end() :].lstrip()
+
+
+class StreamingSpeakerPrefixFilter:
+    """Remove a leading ``Name:`` label from a reply as it streams.
+
+    Stripping only the stored copy would still show the label to the reader while
+    the reply arrives and then silently change it, so the label has to go before
+    the first delta is sent. The filter holds back only as much text as a label
+    could occupy, and stops inspecting anything once real prose has started.
+    """
+
+    # Long enough for "Some Long Character Name:" and nothing like a whole reply.
+    _MAX_HOLD = 48
+
+    def __init__(self, names: list[str] | None = None):
+        self.names = [str(name).strip() for name in (names or []) if str(name or "").strip()]
+        self.buffer = ""
+        self.done = not self.names  # nothing to look for in a solo scene
+
+    def process(self, chunk: str) -> str:
+        if self.done:
+            return chunk
+        self.buffer += chunk
+        # A newline or an asterisk means prose has begun: any colon after that is
+        # punctuation, not a label.
+        decided = (
+            len(self.buffer) > self._MAX_HOLD
+            or "\n" in self.buffer
+            or "*" in self.buffer
+            or '"' in self.buffer
+        )
+        if ":" in self.buffer or decided:
+            out = strip_speaker_prefix(self.buffer, self.names)
+            self.done = True
+            self.buffer = ""
+            return out
+        return ""
+
+    def flush(self) -> str:
+        """Release whatever is still held back (a reply shorter than a label)."""
+        if self.done or not self.buffer:
+            remainder, self.buffer = self.buffer, ""
+            return remainder
+        out = strip_speaker_prefix(self.buffer, self.names)
+        self.buffer = ""
+        self.done = True
+        return out

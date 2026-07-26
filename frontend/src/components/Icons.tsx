@@ -94,3 +94,6 @@ export const IconBookmark = make(<path d="M6 3h12a1 1 0 0 1 1 1v18l-7-4-7 4V4a1 
 export const IconDice = make(<><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1" fill="currentColor" /><circle cx="15.5" cy="8.5" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="8.5" cy="15.5" r="1" fill="currentColor" /><circle cx="15.5" cy="15.5" r="1" fill="currentColor" /></>);
 export const IconEye = make(<><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>);
 export const IconEyeOff = make(<><path d="M10.6 6.2A9.7 9.7 0 0 1 12 6c6.4 0 10 6 10 6a17.6 17.6 0 0 1-3.1 3.8" /><path d="M6.6 6.9A17.4 17.4 0 0 0 2 12s3.6 6 10 6a9.9 9.9 0 0 0 4.1-.9" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /><path d="m3 3 18 18" /></>);
+// A portrait in its frame: the Character Study, drawn from watching the subject.
+export const IconStudy = make(<><rect x="3" y="3" width="18" height="18" rx="2.5" /><circle cx="12" cy="10" r="2.6" /><path d="M7.4 17.6a4.8 4.8 0 0 1 9.2 0" /></>);
+export const IconLock = make(<><rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7" /></>);

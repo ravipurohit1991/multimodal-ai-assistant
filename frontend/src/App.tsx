@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY, StoryThread, StoryThreadKind, StoryThreadsState, SightlineEntry, SightlineLeak, SightlinesState } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY, StoryThread, StoryThreadKind, StoryThreadsState, SightlineEntry, SightlineLeak, SightlinesState, CharacterStudyState, StudyTrait, StudyDrift, GeneratedCharacterCard } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -27,6 +27,7 @@ import { moodToColor } from "./mood";
 import { Soundscape } from "./soundscape";
 import { countStoryThreads, normalizeStoryThreadsState } from "./storyThreads";
 import { countSightlines, normalizeSightlinesState, serializeSightlines, type SightlineDraft } from "./sightlines";
+import { countStudy, normalizeCharacterStudyState, renameStudyLock, renameStudySubject, serializeStudyTraits, type StudyDraft } from "./characterStudy";
 import { createGeneratedRig, createUploadedRig } from "./rigs";
 import { upgradeRoleplayPrompt } from "./prompts";
 import { wipeBrowserPersistence } from "./persistence";
@@ -247,6 +248,22 @@ export default function App() {
     () => countSightlines(sightlines.entries, sightlines.participants),
     [sightlines.entries, sightlines.participants],
   );
+  // Character Study — who each character has become. The sheet travels with the
+  // story, since it is a record of how this cast was played here; a drift report
+  // deliberately does not, because it is about one specific reply.
+  const [characterStudy, setCharacterStudy] = useState<CharacterStudyState>(() => (
+    normalizeCharacterStudyState(savedSettings.characterStudy)
+  ));
+  const [studyBusy, setStudyBusy] = useState(false);
+  // Inventing a character with the model — from a guiding line or from nothing.
+  const [cardBusy, setCardBusy] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const studyCounts = useMemo(
+    () => countStudy(characterStudy.traits, characterStudy.total),
+    [characterStudy.traits, characterStudy.total],
+  );
+  const [studyDrift, setStudyDrift] = useState<StudyDrift[]>([]);
+  const [driftSpeaker, setDriftSpeaker] = useState("");
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
   const [adultMode, setAdultMode] = useState<boolean>(savedSettings.adultMode === true);
   const [assistantMood, setAssistantMood] = useState("");
@@ -688,6 +705,43 @@ export default function App() {
           setSightlineLeaks([]);
           setLeakSpeaker("");
         }
+        if (msg.type === "character_study_updated") {
+          // The backend owns the sheet; mirror its whole view so an edit, a
+          // learning pass, and a reconnect cannot leave the two disagreeing.
+          setCharacterStudy(normalizeCharacterStudyState({
+            enabled: msg.enabled,
+            auto: msg.auto,
+            watch: msg.watch,
+            interval: msg.interval,
+            traits: msg.traits || [],
+            locked: msg.locked || [],
+            covered: msg.covered,
+            total: msg.total,
+          }));
+        }
+        if (msg.type === "character_study_status") {
+          setStudyBusy(msg.busy);
+        }
+        if (msg.type === "study_drift_alert") {
+          setStudyDrift(msg.items || []);
+          setDriftSpeaker(msg.speaker || "");
+        }
+        if (msg.type === "study_drift_resolved") {
+          setStudyDrift([]);
+          setDriftSpeaker("");
+        }
+        if (msg.type === "character_card_status") {
+          setCardBusy(msg.busy);
+        }
+        if (msg.type === "character_card_generated") {
+          setCardBusy(false);
+          if (msg.card) {
+            setCardError(null);
+            adoptGeneratedCharacter(msg.card);
+          } else {
+            setCardError(msg.error || "The model did not return a usable character.");
+          }
+        }
         if (msg.type === "image_generating") {
           console.log(`🎨 Generating image: ${msg.prompt}`);
           setAssistantText(current => current + "\n[Generating image...]");
@@ -901,11 +955,15 @@ export default function App() {
   const speakerNameForTurn = (speaker: Character | null = selectedCharacter): string =>
     isGroupScene && speaker ? speaker.name : "";
 
-  // Before a group generation, point the backend at the chosen speaker's system
-  // prompt and remember them for reply attribution. No-op for solo scenes.
+  // Before every generation, point the backend at the selected character's own
+  // card. This must also happen in a solo scene: changing the sole character used
+  // to leave the previous character's system prompt active on the backend.
+  // Speaker labels remain group-only via speakerNameForTurn().
   const prepareTurnForSpeaker = (speaker: Character | null = selectedCharacter) => {
-    if (isGroupScene && speaker) {
-      pendingSpeakerRef.current = { name: speaker.name, avatar: speaker.avatar };
+    if (speaker) {
+      pendingSpeakerRef.current = isGroupScene
+        ? { name: speaker.name, avatar: speaker.avatar }
+        : null;
       sendJson({
         type: "set_system_prompt",
         content: composeSystemPromptForCharacter(speaker),
@@ -997,6 +1055,38 @@ export default function App() {
     loadCharacterIntoBuffer(c);
   };
 
+  // Ask the model to invent a character: with a guiding line it writes that one,
+  // with nothing it invents outright. Kept out of `llm_task` on the backend, so
+  // asking never cancels a reply that is still streaming.
+  const generateCharacterCard = (guidance: string) => {
+    if (!wsRef.current || cardBusy) return;
+    setCardError(null);
+    setCardBusy(true);
+    sendJson({ type: "generate_character_card", guidance: guidance.trim() });
+  };
+
+  // An invented card becomes a new roster entry rather than overwriting the one
+  // being edited — nobody asked to lose the character they were working on. Only
+  // functional updates and stable setters here: this runs from the WebSocket
+  // handler, which closes over the first render.
+  const adoptGeneratedCharacter = (card: GeneratedCharacterCard) => {
+    const invented: Character = {
+      id: makeId(),
+      name: card.name,
+      description: card.description,
+      personality: card.personality,
+      systemPrompt: "",
+      firstMessage: card.first_message,
+      avatar: null,
+      rigId: null,
+      inScene: true,
+    };
+    setCharacters((prev) => [...prev, invented]);
+    setSelectedCharacterId(invented.id);
+    loadCharacterIntoBuffer(invented);
+    saveSettings({ selectedCharacterId: invented.id });
+  };
+
   const duplicateCharacter = (id: string) => {
     const c = characters.find((x) => x.id === id);
     if (!c) return;
@@ -1051,6 +1141,29 @@ export default function App() {
     sendJson({ type: "set_cast", names: inSceneCharacters.map((c) => c.name).filter(Boolean) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, inSceneCharacters.map((c) => c.name).join(" ")]);
+
+  // A study is keyed by character name, because names are all the backend is ever
+  // told about the roster. Renaming a character would therefore orphan everything
+  // the story had learned about them, so the sheet is carried across with them.
+  // This fires per keystroke while a name is being typed, exactly as the cast sync
+  // above does; the alternative is a card that shows an empty study mid-rename.
+  const lastStudiedNameRef = useRef(assistantName);
+  useEffect(() => {
+    const from = lastStudiedNameRef.current;
+    const to = assistantName.trim();
+    lastStudiedNameRef.current = assistantName;
+    if (!from.trim() || !to || from.trim() === to) return;
+    setCharacterStudy((prev) => {
+      const traits = renameStudySubject(prev.traits, from, to);
+      const locked = renameStudyLock(prev.locked, from, to);
+      const moved = traits.some((trait, index) => trait !== prev.traits[index]);
+      if (!moved && locked.every((name, index) => name === prev.locked[index])) return prev;
+      sendJson({ type: "set_study_traits", traits: serializeStudyTraits(traits) });
+      sendJson({ type: "set_character_study", locked });
+      return { ...prev, traits, locked };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assistantName]);
 
   // Keep the selected character's roster entry in sync with the editable buffer.
   useEffect(() => {
@@ -1258,6 +1371,10 @@ export default function App() {
     setSightlines((prev) => ({ ...prev, entries: [], covered: 0 }));
     setSightlineLeaks([]);
     setSightlinesBusy(false);
+    // And who everyone had become: they became it in a story that no longer exists.
+    setCharacterStudy((prev) => ({ ...prev, traits: [], covered: 0, total: 0 }));
+    setStudyDrift([]);
+    setStudyBusy(false);
     pendingMoodRef.current = "";
     pendingAnimationRef.current = null;
   };
@@ -1274,6 +1391,7 @@ export default function App() {
       "• This conversation & history\n" +
       "• Every character in the cast + your persona\n" +
       "• Story memory, story canon, story threads, sightlines & bookmarks\n" +
+      "• Everything the story learned about who your cast became\n" +
       "• Lorebook, Author's Note, scene & every setting\n" +
       "• Saved stories, images, uploaded characters & logs on disk\n\n" +
       "Continue?"
@@ -1591,6 +1709,81 @@ export default function App() {
     }
   };
 
+  // ----- Character Study -----
+  // The sheet itself is backend-owned; these only ever ask for a change and let
+  // the ``character_study_updated`` echo be the truth.
+
+  const pushStudySettings = (patch: Partial<CharacterStudyState>) => {
+    const next = { ...characterStudy, ...patch };
+    setCharacterStudy(next);
+    if (!next.enabled) {
+      setStudyDrift([]);
+      setStudyBusy(false);
+    }
+    sendJson({
+      type: "set_character_study",
+      enabled: next.enabled,
+      auto: next.auto,
+      watch: next.watch,
+      interval: next.interval,
+    });
+  };
+
+  const updateStudyTraits = (traits: StudyTrait[]) => {
+    setCharacterStudy((prev) => ({ ...prev, traits }));
+    sendJson({ type: "set_study_traits", traits: serializeStudyTraits(traits) });
+  };
+
+  const addStudyTrait = (draft: StudyDraft) => {
+    sendJson({
+      type: "add_study_trait",
+      character: draft.character,
+      facet: draft.facet,
+      text: draft.text,
+      about: draft.about,
+      // A line the reader wrote themself shapes replies at once, and nothing
+      // automatic may revise it.
+      pinned: true,
+    });
+  };
+
+  const setStudyLock = (character: string, locked: boolean) => {
+    sendJson({ type: "set_study_lock", character, locked });
+  };
+
+  // "Catch up now" reads the turns nobody has read; "read the whole story"
+  // rebuilds every sheet from the beginning, which is how the study is adopted
+  // two hundred turns into a conversation.
+  const refreshStudy = (rebuild = false) => {
+    if (!wsRef.current || studyBusy || !characterStudy.enabled) return;
+    setStudyBusy(true);
+    sendJson({ type: "refresh_character_study", rebuild });
+  };
+
+  const checkStudyNow = () => {
+    if (!wsRef.current || studyBusy || !characterStudy.enabled) return;
+    setStudyBusy(true);
+    sendJson({ type: "check_character_study", speaker_name: speakerNameForTurn() });
+  };
+
+  const forgetStudy = () => {
+    setCharacterStudy((prev) => ({ ...prev, traits: [], covered: 0 }));
+    setStudyDrift([]);
+    setStudyBusy(false);
+    sendJson({ type: "forget_character_study" });
+  };
+
+  // What the reader decided about a reported drift: a mistake to write again, or
+  // the moment this character became someone else. Same shape as the other two.
+  const resolveStudyDrift = (action: "reroll" | "accept" | "dismiss") => {
+    sendJson({ type: "resolve_study_drift", action });
+    setStudyDrift([]);
+    if (action === "reroll") {
+      const index = conversationHistory.length - 1;
+      if (conversationHistory[index]?.role === "assistant") generateSwipe(index);
+    }
+  };
+
   // What the reader decided about a reported contradiction. "Write it again"
   // arms the correction on the backend and then regenerates the reply through
   // the ordinary swipe path, so the previous take is kept rather than lost.
@@ -1827,7 +2020,7 @@ export default function App() {
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
       authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory, continuity, storyThreads,
-      sightlines,
+      sightlines, characterStudy,
       responseLength, narrationPerspective, pacing, scene, autoScene, presence,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
@@ -1911,6 +2104,12 @@ export default function App() {
     setSightlines(loadedSightlines);
     setSightlineLeaks([]);
     setSightlinesBusy(false);
+    // And the same for the studies: opening one story must never hold this cast
+    // to who a different cast turned out to be.
+    const loadedStudy = normalizeCharacterStudyState(s.characterStudy);
+    setCharacterStudy(loadedStudy);
+    setStudyDrift([]);
+    setStudyBusy(false);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
     if (s.pacing) setPacing(s.pacing as Pacing);
@@ -2041,6 +2240,16 @@ export default function App() {
         entries: serializeSightlines(loadedSightlines.entries),
         covered: loadedSightlines.covered,
       });
+      sendJson({
+        type: "set_character_study",
+        enabled: loadedStudy.enabled,
+        auto: loadedStudy.auto,
+        watch: loadedStudy.watch,
+        interval: loadedStudy.interval,
+        traits: serializeStudyTraits(loadedStudy.traits),
+        locked: loadedStudy.locked,
+        covered: loadedStudy.covered,
+      });
     }
   };
 
@@ -2159,9 +2368,11 @@ export default function App() {
 
     // Simply resend the message - backend will handle duplicate prevention
     if (wsRef.current) {
+      prepareTurnForSpeaker();
       wsRef.current.send(JSON.stringify({
         type: "text_message",
-        text: lastMessage.content
+        text: lastMessage.content,
+        ...(speakerNameForTurn() ? { speaker_name: speakerNameForTurn() } : {})
       }));
     }
   };
@@ -2280,6 +2491,9 @@ export default function App() {
     sendJson({ type: "interrupt" }); // barge-in: stop the assistant
     player.resetQueue();
 
+    // Audio is transcribed and dispatched entirely by the backend, so there is no
+    // later text-message hook at which to select the current character.
+    prepareTurnForSpeaker();
     sendJson({ type: "user_audio_start" });
     setRecording(true); // Set recording to true BEFORE starting mic
 
@@ -2306,6 +2520,7 @@ export default function App() {
     if (!wsRef.current || inCall) return;
 
     try {
+      prepareTurnForSpeaker();
       // Store current image gen state and disable it for call mode
       prevImageGenStateRef.current = includeImageGen;
       if (includeImageGen) {
@@ -2448,6 +2663,7 @@ export default function App() {
       continuity,
       storyThreads,
       sightlines,
+      characterStudy,
       responseLength,
       narrationPerspective,
       pacing,
@@ -2468,7 +2684,7 @@ export default function App() {
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, storyThreads, sightlines, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, storyThreads, sightlines, characterStudy, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -2553,6 +2769,18 @@ export default function App() {
         auto: sightlines.auto,
         entries: serializeSightlines(sightlines.entries),
         covered: sightlines.covered,
+      });
+      // The studies travel too, so a reconnect does not hand the model a cast it
+      // has never met and make it write them from the card alone.
+      sendJson({
+        type: "set_character_study",
+        enabled: characterStudy.enabled,
+        auto: characterStudy.auto,
+        watch: characterStudy.watch,
+        interval: characterStudy.interval,
+        traits: serializeStudyTraits(characterStudy.traits),
+        locked: characterStudy.locked,
+        covered: characterStudy.covered,
       });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
@@ -2726,6 +2954,11 @@ export default function App() {
           sightlinesBusy={sightlinesBusy}
           sightlineLeaks={sightlines.enabled ? sightlineLeaks : []}
           leakSpeaker={leakSpeaker}
+          studyFirmCount={studyCounts.firm}
+          studyEnabled={characterStudy.enabled}
+          studyBusy={studyBusy}
+          studyDrift={characterStudy.enabled ? studyDrift : []}
+          driftSpeaker={driftSpeaker}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -2762,8 +2995,10 @@ export default function App() {
           onShowCanon={() => setShowCanon(true)}
           onShowThreads={() => setShowStoryThreads(true)}
           onShowSightlines={() => setShowSightlines(true)}
+          onShowStudy={() => setShowCharacterManager(true)}
           onResolveContinuity={resolveContinuity}
           onResolveSightline={resolveSightline}
+          onResolveStudyDrift={resolveStudyDrift}
         />
 
         {/* Cast bar — who's in the scene / who speaks next */}
@@ -2951,6 +3186,18 @@ export default function App() {
         userName={userName}
         userPersona={userPersona}
         userAvatar={userCharacterImage}
+        study={characterStudy}
+        studyBusy={studyBusy}
+        cast={characters.map((c) => c.name).filter(Boolean)}
+        cardBusy={cardBusy}
+        cardError={cardError}
+        onGenerateCard={generateCharacterCard}
+        onStudyTraits={updateStudyTraits}
+        onAddStudyTrait={addStudyTrait}
+        onStudyLock={setStudyLock}
+        onStudySettings={pushStudySettings}
+        onStudyRefresh={refreshStudy}
+        onStudyForget={forgetStudy}
         onClose={() => setShowCharacterManager(false)}
         onSelect={selectCharacter}
         onAdd={addCharacter}

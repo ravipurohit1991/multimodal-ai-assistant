@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import { Character, ContinuityReport, Message, RiggedCharacter, SightlineLeak, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
+import { Character, ContinuityReport, Message, RiggedCharacter, SightlineLeak, StudyDrift, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
 import { MessageItem } from "./MessageItem";
 import { StoryNavigator } from "./StoryNavigator";
 import { ActionMenu, MenuAction, MenuSeparator } from "./ActionMenu";
@@ -11,7 +11,7 @@ import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
   IconStop, IconVolume, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
-  IconSparkles, IconBrain, IconShield, IconThreads, IconEye,
+  IconSparkles, IconBrain, IconShield, IconThreads, IconEye, IconStudy,
   IconSearch, IconChevronDown, IconMoreH,
 } from "./Icons";
 
@@ -70,6 +70,12 @@ interface ConversationPanelProps {
   sightlinesBusy: boolean;
   sightlineLeaks: SightlineLeak[];
   leakSpeaker: string;
+  /** Character Study — how much has firmed up, and any drift in the latest reply. */
+  studyFirmCount: number;
+  studyEnabled: boolean;
+  studyBusy: boolean;
+  studyDrift: StudyDrift[];
+  driftSpeaker: string;
   theme: Theme;
   onToggleImmersive: () => void;
   onToggleFormatting: (enabled: boolean) => void;
@@ -98,8 +104,10 @@ interface ConversationPanelProps {
   onShowCanon: () => void;
   onShowThreads: () => void;
   onShowSightlines: () => void;
+  onShowStudy: () => void;
   onResolveContinuity: (action: "reroll" | "accept" | "dismiss") => void;
   onResolveSightline: (action: "reroll" | "accept" | "dismiss") => void;
+  onResolveStudyDrift: (action: "reroll" | "accept" | "dismiss") => void;
 }
 
 export function ConversationPanel({
@@ -149,6 +157,11 @@ export function ConversationPanel({
   sightlinesBusy,
   sightlineLeaks,
   leakSpeaker,
+  studyFirmCount,
+  studyEnabled,
+  studyBusy,
+  studyDrift,
+  driftSpeaker,
   theme,
   onToggleImmersive,
   onToggleFormatting,
@@ -177,8 +190,10 @@ export function ConversationPanel({
   onShowCanon,
   onShowThreads,
   onShowSightlines,
+  onShowStudy,
   onResolveContinuity,
-  onResolveSightline
+  onResolveSightline,
+  onResolveStudyDrift
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -445,7 +460,7 @@ export function ConversationPanel({
           <ActionMenu
             label="Story"
             icon={<IconBookOpen size={15} />}
-            active={continuityReports.length > 0 || sightlineLeaks.length > 0}
+            active={continuityReports.length > 0 || sightlineLeaks.length > 0 || studyDrift.length > 0}
             panelWidth={310}
             title="Story tools, memory, canon, and settings"
           >
@@ -522,6 +537,26 @@ export function ConversationPanel({
                   }
                   restoreFocusOnClose={false}
                   onSelect={onShowSightlines}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconStudy size={15} className={studyBusy ? "spin" : undefined} />}
+                  label={studyDrift.length > 0 ? "Someone isn't themselves" : "Character study"}
+                  status={studyEnabled}
+                  description={
+                    studyBusy
+                      ? "Reading the story for who this cast has become"
+                      : studyFirmCount > 0
+                        ? `${studyFirmCount} observed ${studyFirmCount === 1 ? "habit" : "habits"} shaping replies`
+                        : "Learn how this cast is actually played, and write them from it"
+                  }
+                  trailing={
+                    studyDrift.length > 0
+                      ? studyDrift.length
+                      : studyFirmCount > 0 ? studyFirmCount : undefined
+                  }
+                  restoreFocusOnClose={false}
+                  onSelect={onShowStudy}
                 />
                 <MenuAction
                   closeMenu={closeMenu}
@@ -814,9 +849,16 @@ export function ConversationPanel({
                       : undefined
                   }
                   leakSpeaker={leakSpeaker}
+                  studyDrift={
+                    idx === conversationHistory.length - 1 && msg.role === "assistant"
+                      ? studyDrift
+                      : undefined
+                  }
+                  driftSpeaker={driftSpeaker}
                   theme={theme}
                   onResolveContinuity={onResolveContinuity}
                   onResolveSightline={onResolveSightline}
+                  onResolveStudyDrift={onResolveStudyDrift}
                   onEdit={onEditMessage}
                   onSaveEdit={onSaveEdit}
                   onCancelEdit={onCancelEdit}

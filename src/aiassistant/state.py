@@ -138,6 +138,35 @@ class ConnState:
     sightline_alert: dict | None = None  # the unresolved leak, if any
     sightline_note: str = ""  # one-shot correction armed for a reroll
     sightlines_task: asyncio.Task | None = None
+    # ----- Character Study (who each character has become) -----
+    # Every other ledger here tracks the world; this one tracks the people. A
+    # study is a short sheet of evidence-backed observations about how a character
+    # speaks and behaves, learned from how they have actually been played, and
+    # injected for whoever is about to speak.
+    # ``enabled`` is the injection half: pure prompt assembly, free, and an empty
+    # study changes no prompt at all. ``auto`` is the learning half, batched every
+    # ``study_interval`` turns rather than run per reply, because characters do not
+    # change every turn. ``watch`` is the adherence half — one pass per reply to
+    # catch a reply that is not this character — and is opt-in like the Continuity
+    # Guard, since that is the one part with a per-reply price.
+    character_study_enabled: bool = True
+    character_study_auto: bool = True
+    character_study_watch: bool = False
+    studies: list[dict] = field(default_factory=list)  # the traits, editable from the UI
+    studies_covered: int = 0  # turns already read for what they show about the cast
+    study_interval: int = 6  # new turns that must pile up before a learning pass
+    # Characters whose sheet the user has frozen. A locked study still shapes
+    # replies — it is the portrait that is finished, not the character.
+    study_locked: list[str] = field(default_factory=list)
+    study_alert: dict | None = None  # the unresolved drift report, if any
+    study_note: str = ""  # one-shot correction armed for a reroll
+    study_task: asyncio.Task | None = None  # in-flight study pass, if any
+
+    # An in-flight "invent a character" generation. Deliberately its own slot
+    # rather than ``llm_task``: opening the cast manager and asking for a
+    # character must never cancel a reply the user is still reading.
+    character_card_task: asyncio.Task | None = None
+
     # The in-scene cast, as the browser last reported it. The roster itself lives
     # in the frontend; the backend needs only the names, so it can tell who is
     # being kept out of what.
@@ -214,6 +243,28 @@ async def cancel_sightlines(state: ConnState):
     state.sightlines_task = None
 
 
+async def cancel_character_study(state: ConnState):
+    """Cancel an in-flight Character Study pass without touching other work."""
+    if state.study_task and not state.study_task.done():
+        state.study_task.cancel()
+        try:
+            await state.study_task
+        except asyncio.CancelledError:
+            pass
+    state.study_task = None
+
+
+async def cancel_character_card(state: ConnState):
+    """Cancel an in-flight character invention without touching other work."""
+    if state.character_card_task and not state.character_card_task.done():
+        state.character_card_task.cancel()
+        try:
+            await state.character_card_task
+        except asyncio.CancelledError:
+            pass
+    state.character_card_task = None
+
+
 async def wipe_connection_state(state: ConnState) -> None:
     """Return every per-connection field to the same state as a fresh socket.
 
@@ -230,6 +281,8 @@ async def wipe_connection_state(state: ConnState) -> None:
     await cancel_continuity(state)
     await cancel_story_threads(state)
     await cancel_sightlines(state)
+    await cancel_character_study(state)
+    await cancel_character_card(state)
 
     fresh = ConnState()
     for state_field in fields(ConnState):

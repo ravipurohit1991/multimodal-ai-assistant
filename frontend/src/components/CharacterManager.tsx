@@ -1,8 +1,10 @@
 import React, { useRef, useState } from "react";
-import { Character, RiggedCharacter } from "../types";
+import { Character, CharacterStudyState, RiggedCharacter, StudyTrait } from "../types";
+import { CharacterStudyPanel } from "./CharacterStudyPanel";
+import { type StudyDraft } from "../characterStudy";
 import { Theme } from "../theme";
 import { rigSummary } from "../rigs";
-import { IconX, IconUsers, IconPlus, IconUpload, IconCopy, IconMessage, IconTrash, IconDice, IconSparkles } from "./Icons";
+import { IconX, IconUsers, IconPlus, IconUpload, IconCopy, IconMessage, IconTrash, IconDice, IconSparkles, IconWand } from "./Icons";
 
 interface CharacterManagerProps {
   show: boolean;
@@ -23,6 +25,21 @@ interface CharacterManagerProps {
   userName: string;
   userPersona: string;
   userAvatar: string | null;
+  // Character Study — what the story has learned about this character, shown
+  // beside the card the author wrote rather than folded into it.
+  study: CharacterStudyState;
+  studyBusy: boolean;
+  cast: string[];
+  // Inventing a character with the model, from a guiding line or from nothing.
+  cardBusy: boolean;
+  cardError: string | null;
+  onGenerateCard: (guidance: string) => void;
+  onStudyTraits: (traits: StudyTrait[]) => void;
+  onAddStudyTrait: (draft: StudyDraft) => void;
+  onStudyLock: (character: string, locked: boolean) => void;
+  onStudySettings: (patch: Partial<CharacterStudyState>) => void;
+  onStudyRefresh: (rebuild: boolean) => void;
+  onStudyForget: () => void;
   onClose: () => void;
   onSelect: (id: string) => void;
   onAdd: () => void;
@@ -103,6 +120,18 @@ export function CharacterManager({
   userName,
   userPersona,
   userAvatar,
+  study,
+  studyBusy,
+  cast,
+  cardBusy,
+  cardError,
+  onGenerateCard,
+  onStudyTraits,
+  onAddStudyTrait,
+  onStudyLock,
+  onStudySettings,
+  onStudyRefresh,
+  onStudyForget,
   onClose,
   onSelect,
   onAdd,
@@ -131,6 +160,9 @@ export function CharacterManager({
   const rigImageInputRef = useRef<HTMLInputElement>(null);
   // Whether the right pane is editing "you" (the user) rather than a cast character.
   const [editingUser, setEditingUser] = useState(false);
+  // The optional guiding line for an invented character. Empty is meaningful: it
+  // means "surprise me", which is a first-class way to use this.
+  const [guidance, setGuidance] = useState("");
   if (!show) return null;
 
   const inSceneCount = characters.filter((c) => c.inScene).length;
@@ -281,6 +313,70 @@ export function CharacterManager({
             >
               <IconUpload size={14} /> Import card
             </button>
+
+            {/* Invent one with the model. The guiding line is optional on purpose:
+                left empty, the backend rolls the character's shape itself rather
+                than asking the model to be "random", which it is not. */}
+            <div
+              style={{
+                marginTop: 8,
+                padding: 9,
+                borderRadius: 10,
+                border: `1px dashed ${theme.colors.border}`,
+                background: theme.colors.surfaceElevated,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 6 }}>
+                <IconWand size={13} style={{ color: theme.colors.secondary }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: theme.colors.textPrimary }}>
+                  Invent a character
+                </span>
+              </div>
+              <textarea
+                className="input"
+                value={guidance}
+                onChange={(e) => setGuidance(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !cardBusy && connected) {
+                    onGenerateCard(guidance);
+                  }
+                }}
+                rows={2}
+                disabled={cardBusy}
+                placeholder="A tired night nurse who used to sing professionally… (or leave blank and be surprised)"
+                style={{ width: "100%", resize: "vertical", fontSize: 11.5, lineHeight: 1.45 }}
+              />
+              <button
+                className="btn btn-quiet"
+                onClick={() => onGenerateCard(guidance)}
+                disabled={!connected || cardBusy}
+                title={
+                  guidance.trim()
+                    ? "Write this character with the model"
+                    : "Invent someone from nothing — the app rolls their shape, the model writes them"
+                }
+                style={{ marginTop: 6, width: "100%", justifyContent: "center", fontSize: 11.5, padding: "5px 9px" }}
+              >
+                {cardBusy ? (
+                  <>
+                    <IconSparkles size={13} className="spin" /> Inventing…
+                  </>
+                ) : guidance.trim() ? (
+                  <>
+                    <IconWand size={13} /> Write this character
+                  </>
+                ) : (
+                  <>
+                    <IconDice size={13} /> Surprise me
+                  </>
+                )}
+              </button>
+              {cardError && (
+                <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.45, color: theme.colors.warning }}>
+                  {cardError}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right editor — the user ("you"), or the selected cast character */}
@@ -414,14 +510,36 @@ export function CharacterManager({
               </div>
             </div>
 
+            {/* As written — the author's card. The study below never edits it. */}
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Description / definition</label>
+              <label style={labelStyle}>
+                Description / definition <span style={hint}>(as written — yours)</span>
+              </label>
               <textarea className="input" value={description} onChange={(e) => onDescriptionChange(e.target.value)} rows={4} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Who is this character — appearance, background, traits, how they speak…" />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Personality</label>
               <textarea className="input" value={personality} onChange={(e) => onPersonalityChange(e.target.value)} rows={2} style={{ width: "100%", resize: "vertical", lineHeight: 1.5 }} placeholder="Core personality traits…" />
+            </div>
+
+            {/* As played — what the story has made of them since. */}
+            <div style={{ marginBottom: 12 }}>
+              <CharacterStudyPanel
+                character={name}
+                cast={cast}
+                userName={userName}
+                study={study}
+                busy={studyBusy}
+                connected={connected}
+                theme={theme}
+                onUpdateTraits={onStudyTraits}
+                onAddTrait={onAddStudyTrait}
+                onSetLock={onStudyLock}
+                onSettings={onStudySettings}
+                onRefresh={onStudyRefresh}
+                onForget={onStudyForget}
+              />
             </div>
 
             <div style={{ marginBottom: 12 }}>

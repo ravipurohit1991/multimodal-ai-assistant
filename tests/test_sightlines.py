@@ -170,34 +170,45 @@ def test_a_solo_scene_falls_back_to_the_active_character():
 
 
 def test_sightlines_ride_after_the_story_so_the_newer_instruction_wins():
-    state = make_state(turns=6, sightlines=[secret_entry()])
+    """The steering rides behind the transcript, but ahead of the user's own turn.
+
+    Everything above it is full of material this character may have no right to —
+    the canon, the memory, a scene they were absent from — so the instruction
+    saying which of it is theirs has to be the more recent of the two.
+    """
+    # An odd turn count leaves the user having spoken last, which is the ordinary
+    # case: they said something and are waiting for an answer.
+    state = make_state(turns=7, sightlines=[secret_entry()])
 
     messages = build_llm_messages(state, speaker="Tomas")
-    positions = {"sightlines": None, "history": None, "reminder": None}
-    for index, message in enumerate(messages):
-        content = message["content"]
-        if "Sightlines" in content:
-            positions["sightlines"] = index
-        elif content.startswith("turn "):
-            positions["history"] = index
-        elif "Final reply check" in content:
-            positions["reminder"] = index
+    steering = next(i for i, m in enumerate(messages) if "Sightlines —" in m["content"])
+    story = [i for i, m in enumerate(messages) if m["content"].startswith("turn ")]
 
-    assert positions["history"] < positions["sightlines"] < positions["reminder"]
+    assert min(story) < steering  # after the story so far
+    assert steering < max(story)  # …and before the latest turn, which stays last
+    assert messages[-1]["role"] == "user"
+    # The reply check travels in the same message, after the ledger it refers to.
+    content = messages[steering]["content"]
+    assert content.index("Sightlines —") < content.index("Final reply check")
 
 
-def test_the_final_reminder_mentions_knowledge_only_when_something_is_withheld():
+def test_the_knowledge_rule_is_stated_once_by_the_ledger_that_owns_it():
+    """The closing check used to repeat it; a rule said twice is not obeyed twice.
+
+    Sightlines states, in full, what this speaker may and may not act on. The
+    reminder repeating a compressed version of the same rule a few lines below only
+    added another directive competing for the model's attention.
+    """
     withheld = make_state(turns=4, sightlines=[secret_entry()])
-    ordinary = make_state(turns=4)
 
-    def reminder(state, speaker):
-        return next(
-            m["content"] for m in build_llm_messages(state, speaker=speaker)
-            if "Final reply check" in m["content"]
-        )
+    steering = next(
+        m["content"] for m in build_llm_messages(withheld, speaker="Tomas")
+        if "Final reply check" in m["content"]
+    )
 
-    assert "Use only what this character knows" in reminder(withheld, "Tomas")
-    assert "Use only what this character knows" not in reminder(ordinary, "Mira")
+    assert "does and does not know" in steering  # the ledger says it
+    assert "Use only what this character knows" not in steering  # and only it does
+    assert steering.count("do not know") == 1
 
 
 def test_a_leak_correction_rides_last_and_still_does_not_name_the_secret():
@@ -208,11 +219,12 @@ def test_a_leak_correction_rides_last_and_still_does_not_name_the_secret():
     state = make_state(turns=4, sightlines=[secret_entry()], sightline_note=note)
 
     messages = build_llm_messages(state, speaker="Tomas")
-    corrections = [i for i, m in enumerate(messages) if "Knowledge correction" in m["content"]]
-    sightlines = [i for i, m in enumerate(messages) if "Sightlines —" in m["content"]]
+    carrying = [m["content"] for m in messages if "Knowledge correction" in m["content"]]
 
-    assert len(corrections) == 1
-    assert corrections[0] > sightlines[0]
+    assert len(carrying) == 1
+    # The correction comes after the ledger inside the one steering message: the
+    # model has just proved that reading the ledger once was not enough.
+    assert carrying[0].index("Sightlines —") < carrying[0].index("Knowledge correction")
     assert TOPIC in note
     assert SECRET not in note
     assert build_leak_note([]) == ""

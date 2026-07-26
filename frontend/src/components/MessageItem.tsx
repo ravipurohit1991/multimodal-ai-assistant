@@ -1,11 +1,11 @@
-import { ContinuityReport, Message, SightlineLeak } from "../types";
+import { ContinuityReport, Message, SightlineLeak, StudyDrift } from "../types";
 import { Theme } from "../theme";
 import { FormattedText } from "./FormattedText";
 import { moodToEmoji, moodToColor } from "../mood";
 import {
   IconVolume, IconStop, IconPencil, IconTrash, IconRewind, IconRefresh,
   IconSend, IconChevronLeft, IconChevronRight, IconPlus, IconCheck, IconX,
-  IconAlert, IconShield, IconBookmark, IconEye,
+  IconAlert, IconShield, IconBookmark, IconEye, IconStudy,
 } from "./Icons";
 
 interface MessageItemProps {
@@ -27,9 +27,14 @@ interface MessageItemProps {
   sightlineLeaks?: SightlineLeak[];
   /** Who spoke — named in the leak notice, since the point is whose knowledge it is. */
   leakSpeaker?: string;
+  /** Places this reply was not the character who wrote it, if any is unresolved. */
+  studyDrift?: StudyDrift[];
+  /** Who spoke — named in the drift notice, since the point is whose voice it is. */
+  driftSpeaker?: string;
   theme: Theme;
   onResolveContinuity?: (action: "reroll" | "accept" | "dismiss") => void;
   onResolveSightline?: (action: "reroll" | "accept" | "dismiss") => void;
+  onResolveStudyDrift?: (action: "reroll" | "accept" | "dismiss") => void;
   onEdit: (index: number) => void;
   onSaveEdit: (index: number) => void;
   onCancelEdit: () => void;
@@ -101,10 +106,13 @@ export function MessageItem({
   immersive = false,
   continuityReports,
   sightlineLeaks,
+  studyDrift,
+  driftSpeaker,
   leakSpeaker,
   theme,
   onResolveContinuity,
   onResolveSightline,
+  onResolveStudyDrift,
   onEdit,
   onSaveEdit,
   onCancelEdit,
@@ -195,6 +203,7 @@ export function MessageItem({
   // reply is still the last thing said and cheap to take back.
   const flagged = (continuityReports?.length ?? 0) > 0;
   const leaked = (sightlineLeaks?.length ?? 0) > 0;
+  const drifted = (studyDrift?.length ?? 0) > 0;
 
   return (
     <div
@@ -486,6 +495,83 @@ export function MessageItem({
                     className="btn btn-quiet"
                     onClick={() => onResolveSightline?.("dismiss")}
                     title="Leave the story exactly as it is"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconX size={13} /> Leave it
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Character Study — this reply was not the character who wrote it.
+                Which is either a mistake or the moment they became someone else,
+                and only the reader can say which, so both roads are offered. */}
+            {drifted && (
+              <div className="fade-up" style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 11,
+                background: `color-mix(in srgb, ${theme.colors.secondary} 8%, ${theme.colors.surface})`,
+                border: `1px solid color-mix(in srgb, ${theme.colors.secondary} 38%, transparent)`,
+                fontFamily: theme.fonts.ui,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+                  <IconStudy size={13} style={{ color: theme.colors.secondary }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.colors.textPrimary }}>
+                    {studyDrift!.length === 1
+                      ? `This does not sound like ${driftSpeaker || "this character"}`
+                      : `This breaks ${studyDrift!.length} things ${driftSpeaker || "this character"} has been`}
+                  </span>
+                </div>
+
+                {studyDrift!.map((report) => (
+                  <div key={report.trait_id} style={{ marginBottom: 7, fontSize: 12.5, lineHeight: 1.55 }}>
+                    <div style={{ color: theme.colors.textSecondary }}>
+                      <span style={{ color: theme.colors.textTertiary }}>Established: </span>
+                      {report.trait}
+                    </div>
+                    {report.quote && (
+                      <div style={{
+                        color: theme.colors.textSecondary,
+                        fontFamily: theme.fonts.prose,
+                        fontStyle: "italic",
+                      }}>
+                        <span style={{ color: theme.colors.textTertiary, fontStyle: "normal", fontFamily: theme.fonts.ui }}>
+                          This reply:{" "}
+                        </span>
+                        “{report.quote}”
+                      </div>
+                    )}
+                    <div style={{ color: theme.colors.textTertiary, fontSize: 11.5 }}>{report.why}</div>
+                    {report.revised && (
+                      <div style={{ color: theme.colors.textTertiary, fontSize: 11.5 }}>
+                        Accepting this would make it: {report.revised}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 9 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onResolveStudyDrift?.("reroll")}
+                    title="Write this reply again, in their own voice"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconRefresh size={13} /> Write it again
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveStudyDrift?.("accept")}
+                    title="They have changed — update their study to match this reply"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconStudy size={13} /> This is who they are now
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveStudyDrift?.("dismiss")}
+                    title="Leave the story and the study exactly as they are"
                     style={{ padding: "5px 10px", fontSize: 12 }}
                   >
                     <IconX size={13} /> Leave it

@@ -13,6 +13,51 @@ from urllib.parse import urlparse
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from aiassistant.character_cards import (
+    GENERATE_TIMEOUT_SECONDS as CARD_TIMEOUT_SECONDS,
+)
+from aiassistant.character_cards import (
+    generate_card as generate_character_card,
+)
+from aiassistant.character_study import (
+    HARVEST_TIMEOUT_SECONDS as STUDY_HARVEST_TIMEOUT_SECONDS,
+)
+from aiassistant.character_study import (
+    REFLECT_TIMEOUT_SECONDS as STUDY_REFLECT_TIMEOUT_SECONDS,
+)
+from aiassistant.character_study import (
+    WATCH_TIMEOUT_SECONDS as STUDY_WATCH_TIMEOUT_SECONDS,
+)
+from aiassistant.character_study import (
+    build_drift_note,
+    harvest_study,
+    is_locked,
+    merge_observations,
+    new_trait,
+    normalize_traits,
+    rebuild_study,
+    reflect,
+    reset_study,
+    set_lock,
+    studied_names,
+    update_trait,
+    watch_reply,
+)
+from aiassistant.character_study import (
+    cast_names as study_cast_names,
+)
+from aiassistant.character_study import (
+    interval as study_interval,
+)
+from aiassistant.character_study import (
+    pending_count as study_pending_count,
+)
+from aiassistant.character_study import (
+    should_reflect as should_reflect_study,
+)
+from aiassistant.character_study import (
+    should_watch as should_watch_study,
+)
 from aiassistant.config import config
 from aiassistant.continuity import (
     HARVEST_TIMEOUT_SECONDS,
@@ -31,10 +76,12 @@ from aiassistant.control_tags import (
     MOOD_TAG_RE,
     SCENE_TAG_RE,
     StreamingHiddenTagFilter,
+    StreamingSpeakerPrefixFilter,
     find_animation_tag_body,
     generate_animation_directive_from_reply,
     parse_animation_tag,
     strip_animation_tags,
+    strip_speaker_prefix,
 )
 from aiassistant.engine_manager import engine_manager
 from aiassistant.llm import OllamaClient
@@ -106,6 +153,7 @@ from aiassistant.sightlines import (
 )
 from aiassistant.state import (
     ConnState,
+    cancel_character_study,
     cancel_continuity,
     cancel_llm,
     cancel_memory,
@@ -372,6 +420,9 @@ async def ws_endpoint(ws: WebSocket):
     # Without this latch, the scheduler could see the old task still alive just
     # after it made its final pending check and lose that newest turn.
     story_threads_rescan_requested = False
+    # The Character Study shares one worker between its learning pass and its
+    # adherence check, so it needs the same latch for the same reason.
+    study_rescan_requested = False
 
     async def run_story_threads_update(*, force: bool = False, rebuild: bool = False):
         """Run one or more serialized scans without delaying the visible reply.
@@ -595,6 +646,182 @@ async def ws_endpoint(ws: WebSocket):
             except Exception:
                 pass  # connection likely gone
 
+    def character_study_state_payload(extra: dict | None = None) -> dict:
+        """The client's whole view of the Character Study, sent after every change.
+
+        The cast travels with it for the same reason it does with Sightlines: the
+        browser owns the roster, but the backend decides which names a study may
+        be about, so the card must be built from the list the sheets were filtered
+        against.
+        """
+        payload = {
+            "type": "character_study_updated",
+            "traits": state.studies,
+            "enabled": state.character_study_enabled,
+            "auto": state.character_study_auto,
+            "watch": state.character_study_watch,
+            "interval": study_interval(state),
+            "locked": state.study_locked,
+            "cast": study_cast_names(state),
+            "studied": studied_names(state),
+            "covered": state.studies_covered,
+            "total": len(conversation_messages(state)),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def run_study_reflection():
+        """One batched pass over the turns nobody has read for the cast yet."""
+        nonlocal study_rescan_requested
+        cancelled = False
+        try:
+            await send_json({"type": "character_study_status", "busy": True})
+            async with state.auxiliary_lock:
+                observed = await asyncio.wait_for(
+                    reflect(state), timeout=STUDY_REFLECT_TIMEOUT_SECONDS
+                )
+            # The cursor advances either way. A pass that read the turns and found
+            # nothing worth recording has still done its job, and re-reading them
+            # could never firm anything up anyway (see ``merge_observations``).
+            state.studies_covered = len(conversation_messages(state))
+            if not observed:
+                await send_json(character_study_state_payload({"unchanged": True}))
+                return
+            locked = frozenset(
+                name.strip().casefold() for name in (state.study_locked or []) if name.strip()
+            )
+            state.studies, added, confirmed = merge_observations(
+                state.studies,
+                observed,
+                turn=len(conversation_messages(state)),
+                locked=locked,
+            )
+            logger.info(
+                f"Character study: {added} new observation(s), {confirmed} confirmed, "
+                f"sheet now {len(state.studies)}"
+            )
+            await send_json(
+                character_study_state_payload({"added": added, "confirmed": confirmed})
+            )
+        except asyncio.CancelledError:
+            cancelled = True
+            logger.info("Character study pass cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Character study pass timed out after {STUDY_REFLECT_TIMEOUT_SECONDS}s")
+            await send_json(character_study_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Character study pass failed: {e}")
+            await send_json(character_study_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "character_study_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+            if not cancelled and study_rescan_requested and should_reflect_study(state):
+                # ``call_soon`` runs after this coroutine is done, so the
+                # one-worker guard accepts the catch-up task.
+                asyncio.get_running_loop().call_soon(schedule_study_reflection)
+
+    def schedule_study_reflection(*, force: bool = False) -> bool:
+        """Queue a learning pass, with at most one study worker per connection."""
+        nonlocal study_rescan_requested
+        if not state.character_study_enabled:
+            return False
+        if state.study_task and not state.study_task.done():
+            study_rescan_requested = True
+            return False
+        if not force and not should_reflect_study(state):
+            return False
+        study_rescan_requested = False
+        state.study_task = asyncio.create_task(run_study_reflection())
+        return True
+
+    async def run_study_watch(reply_text: str, speaker: str):
+        """One check of the latest reply against the speaker's established sheet.
+
+        Drift is only ever *reported*. Whether a reply that is not this character
+        is a mistake or the moment they became someone else is exactly the
+        judgement a reader is better at than a model.
+        """
+        try:
+            await send_json({"type": "character_study_status", "busy": True})
+            async with state.auxiliary_lock:
+                result = await asyncio.wait_for(
+                    watch_reply(state, reply_text, speaker),
+                    timeout=STUDY_WATCH_TIMEOUT_SECONDS,
+                )
+            if result is None:
+                return
+            items = result["drift"]
+            if items:
+                state.study_alert = {"items": items, "speaker": speaker}
+                logger.info(f"Character study: {len(items)} drift report(s) in the latest reply")
+                await send_json(
+                    {"type": "study_drift_alert", "items": items, "speaker": speaker}
+                )
+            else:
+                state.study_alert = None
+        except asyncio.CancelledError:
+            logger.info("Character study check cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Character study check timed out after {STUDY_WATCH_TIMEOUT_SECONDS}s")
+        except Exception as e:
+            logger.error(f"Character study check failed: {e}")
+        finally:
+            try:
+                await send_json({"type": "character_study_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
+    def schedule_study_watch(reply_text: str, speaker: str, force: bool = False) -> bool:
+        """Start an adherence check in the background, at most one at a time."""
+        if not state.character_study_enabled:
+            return False
+        if not force and not should_watch_study(state, speaker):
+            return False
+        if state.study_task and not state.study_task.done():
+            return False
+        if not reply_text.strip():
+            return False
+        state.study_task = asyncio.create_task(run_study_watch(reply_text, speaker))
+        return True
+
+    async def run_study_harvest():
+        """Read the whole story and rebuild every character's sheet from it."""
+        try:
+            await send_json({"type": "character_study_status", "busy": True})
+            async with state.auxiliary_lock:
+                observed = await asyncio.wait_for(
+                    harvest_study(state), timeout=STUDY_HARVEST_TIMEOUT_SECONDS
+                )
+            if not observed:
+                await send_json(character_study_state_payload({"unchanged": True}))
+                return
+            state.studies, added = rebuild_study(state.studies, observed)
+            state.studies_covered = len(conversation_messages(state))
+            logger.info(
+                f"Character study rebuilt from the story: {added} observation(s) read, "
+                f"sheet now {len(state.studies)}"
+            )
+            await send_json(character_study_state_payload({"added": added, "rebuilt": True}))
+        except asyncio.CancelledError:
+            logger.info("Character study harvest cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Character study harvest timed out after {STUDY_HARVEST_TIMEOUT_SECONDS}s")
+            await send_json(character_study_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Character study harvest failed: {e}")
+            await send_json(character_study_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "character_study_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
     async def process_text_message(
         user_text: str,
         image_base64: str | None = None,
@@ -777,6 +1004,10 @@ async def ws_endpoint(ws: WebSocket):
         if state.sightline_note:
             logger.info("Knowledge correction applied to this generation")
             state.sightline_note = ""
+        # And a character correction, likewise.
+        if state.study_note:
+            logger.info("Character correction applied to this generation")
+            state.study_note = ""
 
         # Narrator turns: tell the model the latest message is omniscient stage
         # direction, not the user speaking, so it reacts rather than replying to it.
@@ -830,6 +1061,12 @@ async def ws_endpoint(ws: WebSocket):
         # Initialize text/display filters for streamed output.
         text_filter = StreamingTextFilter()
         display_filter = StreamingHiddenTagFilter()
+        # A group reply is stored as "Mira: ..." so the model can track who spoke;
+        # it copies that label into its own next reply, so strip it before the
+        # reader ever sees it. Solo scenes have no cast to match and pay nothing.
+        prefix_filter = StreamingSpeakerPrefixFilter(
+            [*(state.cast or []), speaker_name or state.char_name]
+        )
 
         # Generation stats for the UI: wall time + a chunk-based token estimate
         # (Ollama streams roughly one token per delta).
@@ -849,7 +1086,7 @@ async def ws_endpoint(ws: WebSocket):
 
                 # Remove hidden IMAGE, SCENE, mood, and animation tags from display
                 # across chunk boundaries, while keeping ordinary tags like [laugh].
-                display_delta = display_filter.process(delta)
+                display_delta = prefix_filter.process(display_filter.process(delta))
 
                 # Detect if IMAGE tags were present
                 if re.search(r"\[IMAGE:\s*[^\]]+\]", delta, re.IGNORECASE):
@@ -890,7 +1127,7 @@ async def ws_endpoint(ws: WebSocket):
 
             # Flush any delayed display text (for example a normal bracketed tag
             # that looked briefly like a hidden control tag while streaming).
-            display_tail = display_filter.flush()
+            display_tail = prefix_filter.process(display_filter.flush()) + prefix_filter.flush()
             if display_tail:
                 await send_json({"type": "assistant_delta", "delta": display_tail})
 
@@ -1051,6 +1288,11 @@ async def ws_endpoint(ws: WebSocket):
             stored_full = MOOD_TAG_RE.sub("", full)
             stored_full = strip_animation_tags(stored_full)
             stored_full = SCENE_TAG_RE.sub("", stored_full).strip()
+            # The same label the reader was spared must not survive into the
+            # history either, or the next turn learns the habit from this one.
+            stored_full = strip_speaker_prefix(
+                stored_full, [*(state.cast or []), speaker_name or state.char_name]
+            )
 
             animation_body = find_animation_tag_body(full)
             if state.include_animation and animation_body:
@@ -1113,6 +1355,19 @@ async def ws_endpoint(ws: WebSocket):
             # withheld from someone, so an ordinary scene never pays for it.
             if schedule_sightlines_check(stored_full, speaker_name or state.char_name):
                 logger.info("Sightlines check queued for the latest reply")
+
+            # The Character Study watches the reply for a character who is not
+            # themselves. Only ever when the speaker has a sheet to be measured
+            # against, so a new story pays nothing for this being available.
+            if schedule_study_watch(stored_full, speaker_name or state.char_name):
+                logger.info("Character study check queued for the latest reply")
+            # …and otherwise, once enough turns have piled up, reads them for what
+            # the cast has become. Batched rather than per-reply: people do not
+            # change every turn, so paying for a pass every turn buys only latency.
+            elif schedule_study_reflection():
+                logger.info(
+                    f"Character study pass queued ({study_pending_count(state)} turns pending)"
+                )
 
             # Story Threads reads the newly completed turn after it is visible.
             # Its worker coalesces if another turn arrives before this pass wins
@@ -1264,7 +1519,8 @@ async def ws_endpoint(ws: WebSocket):
                     await cancel_story_threads(state)
                     state.messages = system_msgs
                     # The running memory describes a story that no longer exists,
-                    # and so do its canon, unresolved threads, and sightlines.
+                    # and so do its canon, unresolved threads, and sightlines —
+                    # along with everything the cast had become in it.
                     await cancel_memory(state)
                     reset_memory(state)
                     await cancel_continuity(state)
@@ -1272,6 +1528,8 @@ async def ws_endpoint(ws: WebSocket):
                     reset_story_threads(state)
                     await cancel_sightlines(state)
                     reset_sightlines(state)
+                    await cancel_character_study(state)
+                    reset_study(state)
                     state.presence_beats = 0
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
@@ -1279,6 +1537,7 @@ async def ws_endpoint(ws: WebSocket):
                     await send_json(canon_state_payload())
                     await send_json(story_threads_state_payload())
                     await send_json(sightlines_state_payload())
+                    await send_json(character_study_state_payload())
 
                 elif mtype == "wipe_all":
                     # Nuke everything: cancel any work, reset this connection's
@@ -1591,6 +1850,9 @@ async def ws_endpoint(ws: WebSocket):
                         f"Cast in scene: {', '.join(state.cast) if state.cast else '(solo)'}"
                     )
                     await send_json(sightlines_state_payload())
+                    # The study is scoped to the cast the same way, and its card
+                    # needs the same list to know who a sheet may be about.
+                    await send_json(character_study_state_payload())
 
                 elif mtype == "set_sightlines":
                     # Settings, plus the restored ledger when a saved story (or a
@@ -1712,6 +1974,177 @@ async def ws_endpoint(ws: WebSocket):
 
                     state.sightline_alert = None
                     await send_json({"type": "sightline_resolved", "action": action or "dismiss"})
+
+                elif mtype == "set_character_study":
+                    # Settings, plus the restored sheets when a saved story (or a
+                    # reconnecting browser) brings its studies back.
+                    restoring_snapshot = "traits" in data or "covered" in data
+                    if "enabled" in data:
+                        state.character_study_enabled = bool(data.get("enabled"))
+                        if not state.character_study_enabled:
+                            # Nothing half-flagged survives switching it off.
+                            await cancel_character_study(state)
+                            state.study_alert = None
+                            state.study_note = ""
+                    if "auto" in data:
+                        state.character_study_auto = bool(data.get("auto"))
+                    if "watch" in data:
+                        state.character_study_watch = bool(data.get("watch"))
+                    if isinstance(data.get("interval"), int):
+                        state.study_interval = int(data["interval"])
+                    if "traits" in data:
+                        await cancel_character_study(state)
+                        state.studies = normalize_traits(data.get("traits"))
+                    if "locked" in data:
+                        names = data.get("locked")
+                        state.study_locked = [
+                            name.strip()
+                            for name in (names if isinstance(names, list) else [])
+                            if isinstance(name, str) and name.strip()
+                        ]
+                    if isinstance(data.get("covered"), int):
+                        history_len = len(conversation_messages(state))
+                        state.studies_covered = max(0, min(int(data["covered"]), history_len))
+                    logger.info(
+                        f"Character study: {'on' if state.character_study_enabled else 'off'}, "
+                        f"auto={'on' if state.character_study_auto else 'off'}, "
+                        f"watch={'on' if state.character_study_watch else 'off'}, "
+                        f"{len(state.studies)} observation(s) covering "
+                        f"{state.studies_covered} messages"
+                    )
+                    await send_json(character_study_state_payload())
+                    # Switching the learning half on can catch up immediately. A
+                    # reconnect or session restore waits for the next reply
+                    # instead: the remaining socket settings (notably model and
+                    # host) may still be in flight behind this message.
+                    if not restoring_snapshot and schedule_study_reflection():
+                        logger.info("Character study catch-up queued after it was enabled")
+
+                elif mtype == "set_study_traits":
+                    # The sheet edited by hand: a reworded observation, a pin, a
+                    # deletion. Always authoritative — this is the author talking.
+                    await cancel_character_study(state)
+                    state.studies = normalize_traits(data.get("traits"))
+                    logger.info(
+                        f"Character study edited by user: {len(state.studies)} observation(s)"
+                    )
+                    await send_json(character_study_state_payload())
+
+                elif mtype == "add_study_trait":
+                    text = str(data.get("text", "") or "").strip()
+                    character = str(data.get("character", "") or "").strip()
+                    if text and character:
+                        trait = new_trait(
+                            text,
+                            character=character,
+                            facet=str(data.get("facet", "manner") or "manner"),
+                            about=str(data.get("about", "") or ""),
+                            turn=len(conversation_messages(state)),
+                            # An observation the user wrote is not a guess waiting
+                            # for a second sighting: it shapes replies at once, and
+                            # nothing automatic may revise it.
+                            origin="authored",
+                            pinned=bool(data.get("pinned", True)),
+                        )
+                        state.studies, added, _ = merge_observations(
+                            state.studies, [trait], turn=trait["last_turn"]
+                        )
+                        if added:
+                            logger.info(
+                                f"Character study line added by user for {character}: {text[:80]}"
+                            )
+                    await send_json(character_study_state_payload())
+
+                elif mtype == "set_study_lock":
+                    # "This portrait is finished." The sheet keeps shaping replies;
+                    # nothing automatic may add to or revise it.
+                    name = str(data.get("character", "") or "").strip()
+                    if name and set_lock(state, name, bool(data.get("locked"))):
+                        logger.info(
+                            f"Character study for {name} "
+                            f"{'locked' if is_locked(state, name) else 'unlocked'}"
+                        )
+                    await send_json(character_study_state_payload())
+
+                elif mtype == "refresh_character_study":
+                    # "Read the story" — rebuild every sheet from the whole
+                    # transcript, so the study can be adopted two hundred turns in.
+                    # Without ``rebuild`` this is just "catch up now".
+                    rebuild = bool(data.get("rebuild", False))
+                    if not state.character_study_enabled:
+                        await send_json(character_study_state_payload({"unchanged": True}))
+                        await send_json({"type": "character_study_status", "busy": False})
+                    elif state.study_task and not state.study_task.done():
+                        logger.info("Character study pass already running; ignoring refresh")
+                    elif rebuild:
+                        state.study_task = asyncio.create_task(run_study_harvest())
+                    elif not schedule_study_reflection(force=True):
+                        await send_json(character_study_state_payload({"unchanged": True}))
+                        await send_json({"type": "character_study_status", "busy": False})
+
+                elif mtype == "check_character_study":
+                    # "Check this reply now" — read the latest reply even when the
+                    # watching half is switched off.
+                    last_reply = next(
+                        (
+                            m.get("content", "")
+                            for m in reversed(state.messages)
+                            if m.get("role") == "assistant"
+                        ),
+                        "",
+                    )
+                    # A stored group reply carries its speaker as a "Name: " prefix.
+                    speaker = str(data.get("speaker_name", "") or "").strip()
+                    if not speaker and ":" in last_reply[:60]:
+                        candidate = last_reply.split(":", 1)[0].strip()
+                        if any(candidate.casefold() == c.casefold() for c in state.cast):
+                            speaker = candidate
+                    if not state.character_study_enabled:
+                        await send_json(character_study_state_payload({"unchanged": True}))
+                    elif not schedule_study_watch(
+                        last_reply, speaker or state.char_name, force=True
+                    ):
+                        logger.info("Character study check already running (or nothing to check)")
+
+                elif mtype == "forget_character_study":
+                    await cancel_character_study(state)
+                    reset_study(state)
+                    logger.info("Character study cleared by user")
+                    await send_json(character_study_state_payload())
+
+                elif mtype == "resolve_study_drift":
+                    # What the user decided about a reported drift. The study
+                    # reports; this is where the character actually changes.
+                    action = str(data.get("action", "") or "").strip().lower()
+                    alert = state.study_alert or {}
+                    items = alert.get("items", [])
+
+                    if action == "reroll":
+                        # Arm the correction; the UI then regenerates the reply as
+                        # an ordinary swipe, and the note is consumed by that turn.
+                        state.study_note = build_drift_note(items)
+                    elif action == "accept":
+                        # "This is who they are now": the reply stands, and the
+                        # sheet is revised to match rather than left contradicting
+                        # it. A report with nothing to revise into means the trait
+                        # simply no longer holds, and it is dropped.
+                        turn = len(conversation_messages(state))
+                        changed = 0
+                        for item in items:
+                            if update_trait(
+                                state,
+                                item.get("trait_id", ""),
+                                item.get("revised", ""),
+                                turn=turn,
+                            ):
+                                changed += 1
+                        logger.info(f"Character study revised by the story ({changed} line(s))")
+                        await send_json(character_study_state_payload())
+
+                    state.study_alert = None
+                    await send_json(
+                        {"type": "study_drift_resolved", "action": action or "dismiss"}
+                    )
 
                 elif mtype == "resolve_continuity":
                     # What the user decided about a reported contradiction. The
@@ -2058,6 +2491,72 @@ async def ws_endpoint(ws: WebSocket):
                             await send_json({"type": "speaker_chosen", "name": candidates[0]})
 
                     state.llm_task = asyncio.create_task(choose_speaker_task(candidates))
+
+                elif mtype == "generate_character_card":
+                    # Invent a whole character, from a guiding line or from
+                    # nothing. Kept off state.llm_task so an in-flight reply is
+                    # never cancelled by someone opening the cast manager.
+                    guidance = str(data.get("guidance", "") or "").strip()
+                    logger.info(
+                        "Inventing a character "
+                        + (f"from guidance: {guidance[:80]}" if guidance else "from the dice")
+                    )
+
+                    async def generate_character_task(guidance: str = guidance):
+                        try:
+                            await send_json({"type": "character_card_status", "busy": True})
+                            async with state.auxiliary_lock:
+                                card = await asyncio.wait_for(
+                                    generate_character_card(state, guidance),
+                                    timeout=CARD_TIMEOUT_SECONDS,
+                                )
+                            if card is None:
+                                await send_json(
+                                    {
+                                        "type": "character_card_generated",
+                                        "card": None,
+                                        "error": "The model did not return a usable character.",
+                                    }
+                                )
+                                return
+                            await send_json({"type": "character_card_generated", "card": card})
+                        except asyncio.CancelledError:
+                            logger.info("Character generation cancelled")
+                            raise
+                        except TimeoutError:
+                            logger.error(
+                                f"Character generation timed out after {CARD_TIMEOUT_SECONDS}s"
+                            )
+                            await send_json(
+                                {
+                                    "type": "character_card_generated",
+                                    "card": None,
+                                    "error": "The model took too long to answer.",
+                                }
+                            )
+                        except Exception as e:
+                            logger.error(f"Character generation failed: {e}")
+                            await send_json(
+                                {
+                                    "type": "character_card_generated",
+                                    "card": None,
+                                    "error": "Character generation failed.",
+                                }
+                            )
+                        finally:
+                            try:
+                                await send_json(
+                                    {"type": "character_card_status", "busy": False}
+                                )
+                            except Exception:
+                                pass  # connection likely gone
+
+                    if state.character_card_task and not state.character_card_task.done():
+                        logger.info("Character generation already running; ignoring request")
+                    else:
+                        state.character_card_task = asyncio.create_task(
+                            generate_character_task()
+                        )
 
                 elif mtype == "suggest_replies":
                     user_name = data.get("user_name", "User")
