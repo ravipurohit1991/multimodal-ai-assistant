@@ -258,8 +258,7 @@ def build_canon_block(state) -> str:
     return (
         "[Story canon — details this story has already established. Every line is "
         "true and stays true. Write the next reply so none of them is broken; if a "
-        "line is inconvenient, work around it rather than quietly changing it. "
-        "Never quote, list, or mention this record.]\n" + lines
+        "line is inconvenient, work around it rather than quietly changing it.]\n" + lines
     )
 
 

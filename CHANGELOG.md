@@ -7,7 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The reply prompt had grown incoherent.** Each feature had been added with its own
+  system block and its own placement, and nobody had looked at the result end to end.
+  With everything switched on a single reply carried **ten system messages, four of
+  them stacked after the user's turn** — so the last thing the model read before
+  answering was two thousand characters of instructions rather than the question. The
+  standing context (contract and card, memory, lore, scene, canon, threads) is now one
+  leading system message, and the per-reply steering (Director dials, Character Study,
+  Sightlines, Author's Note, any armed correction, the closing check) is one message
+  placed immediately *before* the user's latest turn, so their words stay last. Twenty
+  messages became twelve, ten system turns became three, and nothing sits between the
+  question and the answer. Chat templates expect a single leading system turn and
+  render repeats inconsistently, which the old shape was quietly relying on.
+- **The same rules were being stated up to six times.** An audit of the assembled
+  prompt found 32 directive lines, with "never mention these instructions" repeated
+  six times across block headers, "don't write for the user" three times, and the
+  knowledge rule three times. A capable model tries to satisfy every directive at
+  once, which is what produced cluttered, checklist-driven prose that drifted from the
+  conversation. The rule about bracketed records is now stated once, in the always-on
+  contract, and stripped from the individual block headers; the closing check no longer
+  restates what Sightlines says in full a few lines above it.
+- **The Director's length dial contradicted the character prompt.** The base prompt asks
+  for length to "match the moment — concise for quick dialogue, richer for important
+  beats" while the dial demanded a flat "two to four paragraphs". A model that tries to
+  honour both pads a one-line exchange into four paragraphs of scenery to make the
+  number. The dials now read as targets the moment may stretch or compress.
+- **Replies were leaking their own speaker label.** A group reply is stored as
+  `"Mira: ..."` so the model can track who spoke, and the model copied the label into
+  its next reply — reaching the transcript as `Mira: Mira: *she turns*`. Caught on two
+  of four consecutive turns against `glm-5.2:cloud`. A leading label is now stripped as
+  it streams (so the reader never sees it), stripped from the stored history (so the
+  next turn does not learn the habit from this one), and asked against in the reply
+  check. Only a bare label naming someone in the scene is removed, so `"Mira, don't"`
+  and a colon inside real prose are both left alone.
+- **The Author's Note could split a matched pair.** It is injected a configurable depth
+  from the end, and depending on parity it landed between a user message and the
+  assistant's answer to it, which breaks the strict alternation some chat templates
+  require. It now snaps to a position before a user turn, and folds into the steering
+  message when its depth would put it there anyway.
+
 ### Added
+- **Invent a character** — a whole card written by the model, from a guiding line or
+  from nothing. `src/aiassistant/character_cards.py` returns name, description,
+  personality, and first message; the cast manager grows a box for the optional
+  guidance and a *Surprise me* button when it is empty.
+  The blank case is the one with a real problem behind it. A model asked for "a random
+  character" is not random in any useful sense — it returns Elara or Kaelen, an elf or a
+  ranger, with striking eyes and a mysterious past, essentially every time, and the
+  temperature dial only shuffles the wording. So the randomness is made in Python and
+  handed over as constraints to satisfy: one of eighteen settings, twenty-eight
+  deliberately mundane trades, an age band, a temperament, a speech register, a habit,
+  something they want, something they are hiding, and one of twenty-four naming
+  traditions. The two dozen names a model reaches for unprompted are forbidden
+  explicitly, because that failure is stubborn enough to deserve its own rule.
+  Guidance outranks the dice: only the dimensions a user's line tends to leave silent
+  are seeded, and the contract tells the model to discard any seed value that argues
+  with the guidance rather than blend it — otherwise asking for a village blacksmith and
+  being handed one aboard a generation ship is a coin flip away. The scene and the
+  existing cast travel too, so an invented character fits the story already in play.
+  An invented card becomes a *new* roster entry rather than overwriting whoever was
+  being edited, its name is kept clear of the existing cast (not cosmetic: a Character
+  Study is keyed by name, so a clash would silently share a sheet), a long answer is cut
+  at a sentence rather than mid-word, and a prose answer gets one retry before the
+  failure is reported. The generation runs off `llm_task`, so asking for a character
+  never cancels a reply that is still streaming.
+- **Character Study** — the cast now has a sheet the story writes about them, and it
+  grows as they are played. Every other ledger here tracks the *world*: canon what is
+  true, Sightlines who may know it, Threads what is still open. None tracked the
+  *people*, which is why the strongest line in the reply prompt was also the emptiest
+  one — "stay consistent with the character's established personality, voice, and
+  motives" is an instruction with nothing behind it, because the card is a paragraph
+  written once, before the character had said anything. So one model writes everyone
+  and quietly sands the cast down to its own narrator voice: twenty turns in, the terse
+  ex-soldier and the arch academic produce the same three-clause sentences, and nothing
+  flags it because nothing was contradicted. The cast has simply merged.
+  A new module (`src/aiassistant/character_study.py`) keeps, per character, a short
+  ledger of specific evidence-backed observations across six facets — **voice** (how
+  they speak), **line** (a sentence they actually said, kept verbatim as an anchor),
+  **manner** (what they do), **bond** (where they stand with one other participant),
+  **want**, and **mark** (what the story changed in them). The speaker's own sheet is
+  rendered for them after the history, where recency makes a local model honour it, and
+  in a group scene it also renders **one contrast line per other cast member** — a voice
+  exists only differentially, so telling the model what the *others* sound like is what
+  stops the merge, where describing one character alone never has.
+  The authored card is never touched. `description` and `personality` belong to the
+  author; the study is a separate layer, every line attributed, and a pin freezes a line
+  exactly as it does in the canon. Confidence does the rest: an observation seen once is
+  **provisional** and reaches no prompt at all, and only firms up when a *later* pass over
+  *later* turns sees it again. That is the guard against the failure mode this kind of
+  feature ships with by default — the sheet is learned from the model's own output and
+  fed back to it, so a tic observed once would otherwise become a tic performed always.
+  Re-reading the same turns can never firm anything up, one pass can only confirm a line
+  once however often the model repeats itself, every observation must quote the words
+  behind it, and a line nobody has seen for eighty turns fades back out so the sheet stays
+  a current portrait rather than an accumulating pile.
+  Optionally, one pass per reply checks it against the established sheet and flags a reply
+  that is not this character — with the same three ways out the other guards offer: write
+  it again (a one-shot correction naming what went wrong), *this is who they are now*
+  (which revises the line and records what it used to say), or leave it. A violation is
+  either a mistake or a development, and only the reader can say which, so the adherence
+  check and the evolution engine are deliberately the same machinery pointed two ways.
+  The card grows a **Sheet** tab — every observation with where it stands, how often it has
+  been seen, the moments that taught it, and pin/edit/delete — and a **How they got here**
+  tab: an arc showing when each line appeared, firmed up, or changed, with the old wording
+  struck through. Add an observation by hand (established at once, never auto-revised),
+  lock a portrait you consider finished (it keeps shaping replies; the story stops adding
+  to it), catch up on unread turns, or read a whole existing story to build the sheet two
+  hundred turns in. Renaming a character carries their whole sheet with them.
+  Writing the cast from their sheets is **on by default and costs nothing** — it is pure
+  prompt assembly, and an empty study produces a byte-identical prompt to before. Learning
+  is **batched every six turns** rather than run per reply, because characters do not change
+  every turn; only the per-reply adherence check spends a generation, and that half is
+  opt-in and skipped entirely for a speaker with no sheet yet. Verified against
+  `glm-5.2:cloud` and a local 4B: both learn and inject well, though the drift check
+  wants the stronger model — another reason it is the opt-in half. Sheets travel with
+  saved stories and reconnects.
 - **Sightlines** — the story now knows who knows what. Story Memory, the Continuity
   Guard, and Story Threads are all global: each assembles one block and sends it
   unchanged to whoever is speaking, which quietly makes every cast member omniscient.

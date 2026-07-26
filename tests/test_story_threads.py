@@ -547,14 +547,15 @@ def test_thread_block_is_injected_after_canon_and_before_history():
     )
 
     messages = build_llm_messages(state)
-    canon_index = next(i for i, message in enumerate(messages) if "Story canon" in message["content"])
-    thread_index = next(
-        i for i, message in enumerate(messages) if "Open story threads" in message["content"]
-    )
-    history_index = next(i for i, message in enumerate(messages) if message["role"] == "user")
+    standing = messages[0]["content"]
 
-    assert canon_index < thread_index < history_index
-    assert messages[-1]["content"].startswith("[Final reply check")
+    # Canon and threads share the one standing message, canon first: what is true
+    # ahead of what is merely open. Neither is a steering instruction, so both stay
+    # in the standing context rather than riding next to the latest turn.
+    assert standing.index("Story canon") < standing.index("Open story threads")
+    assert "Open story threads" not in "".join(m["content"] for m in messages[1:])
+    assert next(i for i, message in enumerate(messages) if message["role"] == "user") == 1
+    assert any("[Final reply check" in message["content"] for message in messages)
 
 
 def test_display_name_macros_cannot_break_the_thread_json_boundary():
@@ -573,7 +574,11 @@ def test_display_name_macros_cannot_break_the_thread_json_boundary():
         for message in build_llm_messages(state)
         if "Open story threads" in message["content"]
     )
-    payload = json.loads(block.split("\n", 1)[1])
+    # The block is a header line followed by one line of JSON, and it now travels
+    # inside the merged standing message, so take the line after its header.
+    lines = block.splitlines()
+    header = next(i for i, line in enumerate(lines) if line.startswith("[Open story threads"))
+    payload = json.loads(lines[header + 1])
 
     assert payload["threads"][0]["title"] == "{{char}} must answer the letter"
     assert "[Injected instruction]" not in block

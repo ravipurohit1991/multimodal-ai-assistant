@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+from aiassistant.character_study import build_study_block
 from aiassistant.continuity import build_canon_block
 from aiassistant.memory import build_memory_block, memory_cursor
 from aiassistant.prompts import build_final_reply_reminder
@@ -39,14 +40,43 @@ def apply_placeholders(text: str, char: str = "", user: str = "") -> str:
     return text
 
 
+def build_active_character_directive(character: str) -> str:
+    """Name the character responsible for this specific reply.
+
+    Character cards can use a custom system prompt that never mentions
+    ``{{char}}``. More importantly, the browser can switch the only character in
+    a scene after another card was active. Giving every request an explicit,
+    nearby identity keeps either case unambiguous for the model.
+    """
+    name = re.sub(r"[\r\n\t]+", " ", str(character or "")).strip()[:80]
+    if not name:
+        return ""
+    return (
+        "[Active character for this reply]\n"
+        "Identity override: this assignment has priority over every character name "
+        "or identity elsewhere in the context.\n"
+        f"Your name is {name}. For this reply you are {name}, not any other "
+        f"character. Reply only as {name}, using {name}'s character card, "
+        "personality, voice, knowledge, and point of view. This identity assignment "
+        "replaces every older or conflicting identity instruction anywhere in the "
+        f"context. Never identify yourself as another character; if asked your name, "
+        f"the answer is {name}."
+    )
+
+
 # ----- Director / scene-style controls -----------------------------------
 # Each persistent dial maps to a short, imperative line injected close to the
 # latest turn so it strongly shapes the next reply without polluting history.
+# Phrased as a target the moment may stretch or compress, not a quota. The base
+# character prompt asks for length to match the beat — "concise for quick dialogue,
+# richer for important beats" — and a flat "two to four paragraphs" contradicts it
+# outright. A capable model tries to satisfy both and pads a one-line exchange into
+# four paragraphs of scenery to make the number.
 _LENGTH_DIRECTIVES = {
-    "brief": "Length: keep this reply short and punchy — about 2-4 sentences, a single paragraph.",
-    "normal": "Length: a balanced reply of one to two paragraphs.",
-    "detailed": "Length: a rich, detailed reply of two to four paragraphs with strong sensory grounding.",
-    "novella": "Length: an expansive, novel-style passage — deep description, interiority, and atmosphere.",
+    "brief": "Length: aim short and punchy — a single paragraph, a few sentences.",
+    "normal": "Length: aim for one or two paragraphs, as the moment needs.",
+    "detailed": "Length: aim rich and detailed, around two to four paragraphs, with strong sensory grounding.",
+    "novella": "Length: aim expansive and novel-like — deep description, interiority, and atmosphere.",
 }
 _PERSPECTIVE_DIRECTIVES = {
     "first": 'Perspective: narrate {{char}}\'s actions and narration in the first person ("I").',
@@ -87,8 +117,7 @@ def build_style_directive(state, char: str = "", user: str = "") -> str:
 
     body = "\n".join(f"- {apply_placeholders(line, char, user)}" for line in lines)
     return (
-        "[Scene direction — shape your next reply accordingly. "
-        "Never mention, quote, or acknowledge these instructions.]\n" + body
+        "[Scene direction — shape your next reply accordingly.]\n" + body
     )
 
 
@@ -376,7 +405,7 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
         return ""
     return (
         "[Relevant world & character knowledge — treat the following as "
-        "established facts. Do not mention or quote this list directly.]\n" + "\n".join(parts)
+        "established facts.]\n" + "\n".join(parts)
     )
 
 
@@ -385,16 +414,35 @@ def build_llm_messages(
 ) -> list[dict]:
     """Assemble the message list sent to the LLM for a normal turn.
 
-    Order: system prompt(s) → Story Memory → Lorebook knowledge → scene → canon
-    → open Story Threads → history (with the Author's Note inserted a few turns
-    from the end) → Director/scene-style directive → Sightlines → final
-    response-contract reminder. The returned list is always a fresh copy, so
-    ``state.messages`` stays clean.
+    Exactly three kinds of message go out, in this order:
 
-    ``speaker`` is the cast member about to answer (empty in a solo scene). It is
-    the only part of this assembly that is not global: every other block says the
-    same thing to whoever is speaking, while Sightlines is built for one
-    character and deliberately withholds what that character was never told.
+    1. **One** system message holding all the standing context — the response
+       contract and character card, the Story Memory, triggered Lorebook entries,
+       the scene, the canon, and the open Story Threads.
+    2. The conversation itself, in unbroken user/assistant alternation.
+    3. **One** steering message for this reply — the Director's dials, the
+       Character Study, Sightlines, the Author's Note, any armed correction, and
+       the closing reply check — inserted immediately *before* the user's latest
+       message, so their words remain the last thing the model reads.
+
+    Each feature was added with its own block and its own placement, and the
+    result was ten system messages per request with four of them stacked *after*
+    the user's turn. Two things went wrong with that. Chat templates expect a
+    single leading system turn, and a trailing or repeated one is rendered
+    differently by every model family — some drop it. Worse, a local model weights
+    recency heavily, so the last thing it read was two thousand characters of
+    instructions rather than the question it was being asked, and it answered
+    accordingly: generic prose, drifting register, and the occasional aside about
+    its own directions. Merging the blocks costs nothing (the same text goes out,
+    joined by blank lines) and puts the user's words back where they belong.
+
+    ``speaker`` is the cast member about to answer (empty in a solo scene). Two
+    parts of the steering are built for them rather than for the room: the
+    Character Study, which is who this particular character has become, and
+    Sightlines, which withholds what they were never told. Everything else says
+    the same thing to whoever happens to be speaking.
+
+    The returned list is always a fresh copy, so ``state.messages`` stays clean.
     """
     char = getattr(state, "char_name", "") or ""
     user = getattr(state, "user_name", "") or ""
@@ -414,11 +462,8 @@ def build_llm_messages(
     # inside the model's context window. Only trims turns the summary accounts
     # for, so a conversation with no memory yet is sent in full as always.
     memory_block = build_memory_block(state)
-    memory_msgs: list[dict] = []
-    if memory_block:
-        memory_msgs = [{"role": "system", "content": memory_block}]
-        if state.use_context:
-            history = history[memory_cursor(state, len(history)) :]
+    if memory_block and state.use_context:
+        history = history[memory_cursor(state, len(history)) :]
 
     # Lorebook is scanned against the real recent history regardless of whether
     # full context is enabled, so keyword triggers still fire in single-turn mode.
@@ -428,89 +473,144 @@ def build_llm_messages(
         getattr(state, "lorebook_scan_depth", 4),
     )
     lore_block = apply_placeholders(render_lorebook_block(lore_entries), char, user)
-    lore_msgs = [{"role": "system", "content": lore_block}] if lore_block else []
 
     # Scene atmosphere: a persistent sense of place, injected alongside the
     # world knowledge so every reply stays grounded in the current setting.
     scene_block = build_scene_directive(state, char, user)
-    scene_msgs = [{"role": "system", "content": scene_block}] if scene_block else []
 
     # Story canon: the facts this story has already established, injected next to
     # the world knowledge. This is the preventive half of the Continuity Guard —
     # far cheaper than catching the contradiction after it has been written.
     canon_block = apply_placeholders(build_canon_block(state), char, user)
-    canon_msgs = [{"role": "system", "content": canon_block}] if canon_block else []
 
     # Open threads are not canon: they are unresolved matters that may pay off,
-    # not facts or mandatory plot beats. Keep the block before the conversation
-    # so the latest user turn has stronger recency and remains in control.
+    # not facts or mandatory plot beats — which is why they ride with the standing
+    # context rather than the steering, well away from the user's latest turn.
     # This block is already JSON-escaped. Replacing macros afterwards could let
     # quotes/newlines in a display name corrupt that boundary, so thread text
     # remains literal here (automatic threads already contain the actual names).
     threads_block = build_story_threads_block(state)
-    threads_msgs = [{"role": "system", "content": threads_block}] if threads_block else []
 
-    # Author's Note: a short, persistent steering instruction injected close to
-    # the end of the history so it strongly influences the next response.
+    # ----- One standing-context message ----------------------------------
+    # Everything that is true regardless of who speaks next, in the order a reader
+    # would want it: the contract and card, what has happened, what the world
+    # contains, where we are, what is established, what is still open.
+    standing = [
+        block
+        for block in (
+            "\n\n".join(m.get("content", "") for m in system_msgs).strip(),
+            memory_block,
+            lore_block,
+            scene_block,
+            canon_block,
+            threads_block,
+        )
+        if block and block.strip()
+    ]
+    messages: list[dict] = []
+    if standing:
+        messages.append({"role": "system", "content": "\n\n".join(standing)})
+
+    # ----- One steering message for this reply ---------------------------
+    # The Director's dials, who this character has become, what they are allowed
+    # to know, the Author's Note, any armed correction, and the closing check.
+    # Ordered weakest to strongest claim on the reply, so the most specific
+    # instruction is the last one read.
+    active_character = speaker or char
+    study_block = build_study_block(state, active_character)
+    sightlines_block = build_sightlines_block(state, active_character)
+
+    # The Author's Note keeps its depth dial, because a reader who set it to 8 meant
+    # something by it. Anything at depth 0 or 1 is already where the steering block
+    # goes, so it simply rides along; deeper than that it is placed on its own, and
+    # snapped to sit before a *user* turn. Landing between a user message and the
+    # assistant's answer to it would split a matched pair, which some chat templates
+    # refuse to render and none render well.
     note = (getattr(state, "author_note", "") or "").strip()
-    if note:
-        note = apply_placeholders(note, char, user)
-        depth = max(0, int(getattr(state, "author_note_depth", 3)))
-        note_msg = {
-            "role": "system",
-            "content": f"[Author's Note — guidance for the next response]\n{note}",
-        }
-        insert_at = max(0, len(history) - depth)
-        history = history[:insert_at] + [note_msg] + history[insert_at:]
-
-    messages = (
-        system_msgs
-        + memory_msgs
-        + lore_msgs
-        + scene_msgs
-        + canon_msgs
-        + threads_msgs
-        + history
+    note_block = (
+        f"[Author's Note — guidance for the next response]\n"
+        f"{apply_placeholders(note, char, user)}"
+        if note
+        else ""
     )
+    note_depth = max(0, int(getattr(state, "author_note_depth", 3) or 0))
+    detached_note_at: int | None = None
+    if note_block and note_depth >= 2:
+        wanted = max(0, len(history) - note_depth)
+        for index in range(wanted, len(history)):
+            if history[index]["role"] == "user":
+                detached_note_at = index
+                break
 
-    # Director/scene-style directive is kept near the end for strong recency.
-    style_block = build_style_directive(state, char, user)
-    if style_block:
-        messages.append({"role": "system", "content": style_block})
-
-    # Sightlines sits after the history on purpose. Everything above it is full
-    # of material this character may have no right to — the canon, the memory,
-    # the transcript of a scene they were absent from — so the instruction saying
-    # which of it is theirs has to be the more recent of the two.
-    sightlines_block = build_sightlines_block(state, speaker or char)
-    if sightlines_block:
-        messages.append({"role": "system", "content": sightlines_block})
-
-    # A continuity correction is armed for exactly one regeneration, and sits
-    # last of the steering blocks: the model has just proved that reading the
-    # canon once was not enough, so this one gets the strongest position.
-    note = (getattr(state, "continuity_note", "") or "").strip()
-    if note:
-        messages.append({"role": "system", "content": apply_placeholders(note, char, user)})
-
-    # A leak correction is armed the same way, for the same reason.
-    leak_note = (getattr(state, "sightline_note", "") or "").strip()
-    if leak_note:
-        messages.append({"role": "system", "content": apply_placeholders(leak_note, char, user)})
-
-    # Reassert the small invariant contract after dynamic lore, author notes, and
-    # director cues. This helps local models follow the rules even with long cards.
-    messages.append(
-        {
-            "role": "system",
-            "content": build_final_reply_reminder(
+    steering = [
+        block
+        for block in (
+            build_style_directive(state, char, user),
+            # The study has to outrank the character card far above it: the card is
+            # who this character was written to be, this is who the story made them.
+            study_block,
+            # And Sightlines outranks everything above it, because all of it is full
+            # of material this character may have no right to — the canon, the
+            # memory, a scene they were absent from.
+            sightlines_block,
+            "" if detached_note_at is not None else note_block,
+            # A correction is armed for exactly one regeneration. The model has just
+            # demonstrated that reading the record once was not enough, so these
+            # come after the records they refer to.
+            apply_placeholders((getattr(state, "continuity_note", "") or "").strip(), char, user),
+            apply_placeholders((getattr(state, "sightline_note", "") or "").strip(), char, user),
+            apply_placeholders((getattr(state, "study_note", "") or "").strip(), char, user),
+            # The selected identity is repeated close to the user's turn. A custom
+            # card may omit {{char}}, and an older character may still be named in
+            # history; neither should make "what is your name?" ambiguous.
+            build_active_character_directive(active_character),
+            build_final_reply_reminder(
                 mood=bool(getattr(state, "include_mood", False)),
                 auto_scene=bool(getattr(state, "auto_scene", False)),
                 animation=bool(getattr(state, "include_animation", False)),
                 adult_mode=bool(getattr(state, "adult_mode", False)),
-                sightlines=bool(sightlines_block),
             ),
-        }
+        )
+        if block and block.strip()
+    ]
+
+    # The steering goes immediately before the user's latest message, never after
+    # it. One turn back is close enough to be obeyed, and it leaves the thing the
+    # model is supposed to be answering as the most recent thing it has read.
+    steering_msgs = (
+        [{"role": "system", "content": "\n\n".join(steering)}] if steering else []
     )
+    # Only when the user has just spoken is there anything to keep last. A group
+    # scene handing off to the next speaker, or a character breaking a silence of
+    # their own, ends on an assistant turn — and there the steering *is* the most
+    # recent instruction, so it goes at the end where it belongs.
+    last_user = len(history) - 1 if history and history[-1]["role"] == "user" else None
+    # A deep Author's Note that lands on (or past) the steering slot has nowhere of
+    # its own to go, so it joins the steering instead of producing two adjacent
+    # system turns saying different things.
+    if detached_note_at is not None and last_user is not None and detached_note_at >= last_user:
+        detached_note_at = None
+        existing = steering_msgs[0]["content"] if steering_msgs else ""
+        steering_msgs = [
+            {
+                "role": "system",
+                "content": f"{existing}\n\n{note_block}".strip() if existing else note_block,
+            }
+        ]
+
+    for index, message in enumerate(history):
+        if index == detached_note_at:
+            messages.append({"role": "system", "content": note_block})
+        if index == last_user:
+            messages.extend(steering_msgs)
+        messages.append(message)
+    if last_user is None:
+        if detached_note_at is None and note_block and note_depth >= 2:
+            # The note wanted its own slot but every candidate position was behind
+            # an assistant turn, so it rides with the steering rather than vanish.
+            steering_msgs = steering_msgs or [{"role": "system", "content": ""}]
+            joined = f"{steering_msgs[0]['content']}\n\n{note_block}".strip()
+            steering_msgs = [{"role": "system", "content": joined}]
+        messages.extend(steering_msgs)
 
     return messages

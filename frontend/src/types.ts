@@ -38,6 +38,12 @@ export type ServerMsg =
   | { type: "sightlines_status"; busy: boolean }
   | { type: "sightline_alert"; items: SightlineLeak[]; speaker?: string }
   | { type: "sightline_resolved"; action: string }
+  | { type: "character_study_updated"; traits: any[]; enabled: boolean; auto: boolean; watch: boolean; interval: number; locked: string[]; cast: string[]; studied: string[]; covered: number; total: number; added?: number; confirmed?: number; rebuilt?: boolean; unchanged?: boolean }
+  | { type: "character_study_status"; busy: boolean }
+  | { type: "study_drift_alert"; items: StudyDrift[]; speaker?: string }
+  | { type: "study_drift_resolved"; action: string }
+  | { type: "character_card_generated"; card: GeneratedCharacterCard | null; error?: string }
+  | { type: "character_card_status"; busy: boolean }
   | { type: "wiped_all"; summary?: any }
   | { type: "error"; message: string };
 
@@ -362,6 +368,129 @@ export const DEFAULT_SIGHTLINES: SightlinesState = {
   participants: [],
   covered: 0,
 };
+
+/**
+ * Character Study — who each character has become.
+ *
+ * Every other ledger here tracks the world: canon what is true, sightlines who
+ * may know it, threads what is still open. This one tracks the people. A trait
+ * is one specific, evidence-backed observation about how a character has actually
+ * been played, learned from the story rather than written in advance, and kept
+ * beside the authored card instead of overwriting it.
+ */
+export type StudyFacet = "voice" | "line" | "manner" | "bond" | "want" | "mark";
+
+export const STUDY_FACETS: StudyFacet[] = ["voice", "line", "manner", "bond", "want", "mark"];
+
+/** How each facet is labelled in the card. */
+export const STUDY_FACET_LABELS: Record<StudyFacet, string> = {
+  voice: "Voice",
+  line: "Line",
+  manner: "Manner",
+  bond: "Bond",
+  want: "Want",
+  mark: "Mark",
+};
+
+/** What each facet is, for a reader meeting the sheet for the first time. */
+export const STUDY_FACET_HINTS: Record<StudyFacet, string> = {
+  voice: "How they speak",
+  line: "Something they actually said",
+  manner: "What they do",
+  bond: "Where they stand with someone",
+  want: "What they are after",
+  mark: "What the story changed in them",
+};
+
+/** The words behind an observation — the reason it is in the sheet at all. */
+export interface StudyEvidence {
+  quote: string;
+  /** Transcript message count when those words were written. */
+  turn: number;
+}
+
+/**
+ * `provisional` has been seen once and shapes no reply yet; `firm` is
+ * established and reaches the prompt; `faded` went unobserved for long enough to
+ * stop being current. Derived from the trait and the story's length, never stored.
+ */
+export type StudyStatus = "provisional" | "firm" | "faded";
+
+export interface StudyTrait {
+  id: string;
+  /** Who this is about. Matches a character's name, not their id. */
+  character: string;
+  facet: StudyFacet;
+  text: string;
+  /** Only for a bond: the other participant, or the `@user` token. */
+  about: string;
+  evidence: StudyEvidence[];
+  /** How many separate passes have seen it. Two is enough to shape a reply. */
+  observations: number;
+  firstTurn: number;
+  lastTurn: number;
+  /** `authored` was written by hand and is never auto-revised. */
+  origin: "learned" | "authored";
+  /** Pinned traits always reach the model, never fade, and survive a rebuild. */
+  pinned: boolean;
+  /** Earlier wordings, newest last — how the character got here. */
+  history: StudyEvidence[];
+}
+
+/** One reported place where a reply was not the character who wrote it. */
+export interface StudyDrift {
+  trait_id: string;
+  /** The observation as it stands. */
+  trait: string;
+  facet: StudyFacet;
+  character: string;
+  /** The words in the reply that broke it. */
+  quote: string;
+  why: string;
+  /** What the trait would become if this is accepted as a development. */
+  revised: string;
+}
+
+export interface CharacterStudyState {
+  /** Inject each speaker's sheet. Pure prompt assembly, so it costs nothing. */
+  enabled: boolean;
+  /** Learn from the story every `interval` turns. Batched, not per reply. */
+  auto: boolean;
+  /** Watch each reply for a character who is not themselves. Costs a pass. */
+  watch: boolean;
+  interval: number;
+  traits: StudyTrait[];
+  /** Characters whose sheet is frozen: it still shapes replies, but never grows. */
+  locked: string[];
+  /** Number of transcript messages already read for what they show. */
+  covered: number;
+  total: number;
+}
+
+export const DEFAULT_CHARACTER_STUDY: CharacterStudyState = {
+  enabled: true,
+  auto: true,
+  watch: false,
+  interval: 6,
+  traits: [],
+  locked: [],
+  covered: 0,
+  total: 0,
+};
+
+/** Observations must be seen this many times before they shape a reply. */
+export const STUDY_FIRM_AT = 2;
+
+/**
+ * A character card the model invented — from a guiding line, or from nothing at
+ * all. Only the fields a roster entry needs; the avatar and rig stay the user's.
+ */
+export interface GeneratedCharacterCard {
+  name: string;
+  description: string;
+  personality: string;
+  first_message: string;
+}
 
 export interface VoiceInfo {
   name: string;

@@ -70,3 +70,66 @@ def test_streamed_json_animation_tag_is_hidden_entirely():
     chunks = ['Hi [ANIM: {"pose":{"head":', '{"rotation":-8}}}] there']
 
     assert stream(chunks) == "Hi  there"
+
+
+# ----- Speaker prefixes ---------------------------------------------------
+# A group reply is stored as "Mira: ..." so the model can track who spoke, and the
+# model then copies that label into its own next reply. Left alone the transcript
+# fills with "Mira: Mira: *she turns*".
+
+from aiassistant.control_tags import (  # noqa: E402
+    StreamingSpeakerPrefixFilter,
+    strip_speaker_prefix,
+)
+
+CAST = ["Mira", "Tomas"]
+
+
+def test_a_copied_speaker_label_is_removed():
+    assert strip_speaker_prefix("Mira: *She turns.*", CAST) == "*She turns.*"
+    assert strip_speaker_prefix("  Tomas : Ask her.", CAST) == "Ask her."
+    assert strip_speaker_prefix("mira: fine.", CAST) == "fine."
+
+
+def test_a_name_that_is_not_in_the_scene_is_left_alone():
+    assert strip_speaker_prefix("Narrator: the storm broke.", CAST).startswith("Narrator:")
+    assert strip_speaker_prefix("Mira: *She turns.*", []) == "Mira: *She turns.*"
+
+
+def test_dialogue_that_merely_begins_with_a_name_is_not_touched():
+    for reply in (
+        '"Mira, don\'t." *He steps back.*',
+        "*She looks up.* \"Tomas: that's what the ledger says.\"",
+        "Mira had already gone.",
+    ):
+        assert strip_speaker_prefix(reply, CAST) == reply
+
+
+def test_a_colon_inside_real_prose_is_not_mistaken_for_a_label():
+    reply = "*She counts them off: three days, two boats, one road.*"
+    assert strip_speaker_prefix(reply, CAST) == reply
+
+
+def test_the_streaming_filter_removes_the_label_before_the_reader_sees_it():
+    filter_ = StreamingSpeakerPrefixFilter(CAST)
+    out = "".join(filter_.process(chunk) for chunk in ["Mi", "ra", ": *She", " turns.*"])
+    out += filter_.flush()
+    assert out == "*She turns.*"
+
+
+def test_the_streaming_filter_passes_an_ordinary_reply_through_unchanged():
+    filter_ = StreamingSpeakerPrefixFilter(CAST)
+    chunks = ["*She ", "turns.* ", '"What letter?"']
+    out = "".join(filter_.process(chunk) for chunk in chunks) + filter_.flush()
+    assert out == "".join(chunks)
+
+
+def test_the_streaming_filter_holds_nothing_back_in_a_solo_scene():
+    filter_ = StreamingSpeakerPrefixFilter([])
+    assert filter_.process("Mira: *She turns.*") == "Mira: *She turns.*"
+
+
+def test_the_streaming_filter_releases_a_reply_shorter_than_a_label():
+    filter_ = StreamingSpeakerPrefixFilter(CAST)
+    held = filter_.process("Fine")
+    assert held + filter_.flush() == "Fine"

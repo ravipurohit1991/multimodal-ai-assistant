@@ -412,8 +412,7 @@ def build_sightlines_block(state, speaker: str = "") -> str:
 
     sections = [
         f"[Sightlines — what {display_name(me, user_name)} does and does not know. "
-        "This governs what you may act on. Never quote, list, summarise, or refer "
-        "to this record itself.]"
+        "This governs what you may act on.]"
     ]
     if known_lines:
         sections.append(
