@@ -1,11 +1,11 @@
-import { ContinuityReport, Message } from "../types";
+import { ContinuityReport, Message, SightlineLeak } from "../types";
 import { Theme } from "../theme";
 import { FormattedText } from "./FormattedText";
 import { moodToEmoji, moodToColor } from "../mood";
 import {
   IconVolume, IconStop, IconPencil, IconTrash, IconRewind, IconRefresh,
   IconSend, IconChevronLeft, IconChevronRight, IconPlus, IconCheck, IconX,
-  IconAlert, IconShield, IconBookmark,
+  IconAlert, IconShield, IconBookmark, IconEye,
 } from "./Icons";
 
 interface MessageItemProps {
@@ -23,8 +23,13 @@ interface MessageItemProps {
   immersive?: boolean;
   /** Continuity conflicts reported against this reply, if any are unresolved. */
   continuityReports?: ContinuityReport[];
+  /** Knowledge this reply's speaker had no way of having, if any is unresolved. */
+  sightlineLeaks?: SightlineLeak[];
+  /** Who spoke — named in the leak notice, since the point is whose knowledge it is. */
+  leakSpeaker?: string;
   theme: Theme;
   onResolveContinuity?: (action: "reroll" | "accept" | "dismiss") => void;
+  onResolveSightline?: (action: "reroll" | "accept" | "dismiss") => void;
   onEdit: (index: number) => void;
   onSaveEdit: (index: number) => void;
   onCancelEdit: () => void;
@@ -95,8 +100,11 @@ export function MessageItem({
   formattingEnabled,
   immersive = false,
   continuityReports,
+  sightlineLeaks,
+  leakSpeaker,
   theme,
   onResolveContinuity,
+  onResolveSightline,
   onEdit,
   onSaveEdit,
   onCancelEdit,
@@ -186,6 +194,7 @@ export function MessageItem({
   // A continuity conflict is shown against the reply that caused it, while that
   // reply is still the last thing said and cheap to take back.
   const flagged = (continuityReports?.length ?? 0) > 0;
+  const leaked = (sightlineLeaks?.length ?? 0) > 0;
 
   return (
     <div
@@ -404,6 +413,78 @@ export function MessageItem({
                   <button
                     className="btn btn-quiet"
                     onClick={() => onResolveContinuity?.("dismiss")}
+                    title="Leave the story exactly as it is"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconX size={13} /> Leave it
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Sightlines — this character just used something they were never
+                told. Only the spoiler-free topic is named here: the reader may
+                be one of the people being kept in the dark. */}
+            {leaked && (
+              <div className="fade-up" style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 11,
+                background: `color-mix(in srgb, ${theme.colors.primary} 8%, ${theme.colors.surface})`,
+                border: `1px solid color-mix(in srgb, ${theme.colors.primary} 38%, transparent)`,
+                fontFamily: theme.fonts.ui,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+                  <IconEye size={13} style={{ color: theme.colors.primary }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: theme.colors.textPrimary }}>
+                    {sightlineLeaks!.length === 1
+                      ? `${leakSpeaker || "This character"} used something they were never told`
+                      : `${leakSpeaker || "This character"} used ${sightlineLeaks!.length} things they were never told`}
+                  </span>
+                </div>
+
+                {sightlineLeaks!.map((leak) => (
+                  <div key={leak.entry_id} style={{ marginBottom: 7, fontSize: 12.5, lineHeight: 1.55 }}>
+                    <div style={{ color: theme.colors.textSecondary }}>
+                      <span style={{ color: theme.colors.textTertiary }}>Not theirs to know: </span>
+                      {leak.topic}
+                    </div>
+                    {leak.quote && (
+                      <div style={{
+                        color: theme.colors.textSecondary,
+                        fontFamily: theme.fonts.prose,
+                        fontStyle: "italic",
+                      }}>
+                        <span style={{ color: theme.colors.textTertiary, fontStyle: "normal", fontFamily: theme.fonts.ui }}>
+                          This reply:{" "}
+                        </span>
+                        “{leak.quote}”
+                      </div>
+                    )}
+                    <div style={{ color: theme.colors.textTertiary, fontSize: 11.5 }}>{leak.why}</div>
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 9 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onResolveSightline?.("reroll")}
+                    title="Write this reply again, without the knowledge they never had"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconRefresh size={13} /> Write it again
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveSightline?.("accept")}
+                    title="Let them keep it — they know it from now on"
+                    style={{ padding: "5px 10px", fontSize: 12 }}
+                  >
+                    <IconEye size={13} /> They know it now
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    onClick={() => onResolveSightline?.("dismiss")}
                     title="Leave the story exactly as it is"
                     style={{ padding: "5px 10px", fontSize: 12 }}
                   >

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import { Character, ContinuityReport, Message, RiggedCharacter, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
+import { Character, ContinuityReport, Message, RiggedCharacter, SightlineLeak, StageAnimationDirective, VoiceInfo, TtsEngine, OutputMode, SceneState } from "../types";
 import { MessageItem } from "./MessageItem";
 import { StoryNavigator } from "./StoryNavigator";
 import { ActionMenu, MenuAction, MenuSeparator } from "./ActionMenu";
@@ -11,7 +11,7 @@ import { Theme } from "../theme";
 import {
   IconPanelLeft, IconPanelRight, IconBookOpen, IconSliders, IconEraser,
   IconStop, IconVolume, IconFilm, IconMessage, IconImage, IconItalic, IconFeather,
-  IconSparkles, IconBrain, IconShield, IconThreads,
+  IconSparkles, IconBrain, IconShield, IconThreads, IconEye,
   IconSearch, IconChevronDown, IconMoreH,
 } from "./Icons";
 
@@ -64,6 +64,12 @@ interface ConversationPanelProps {
   pinnedThreadCount: number;
   threadsEnabled: boolean;
   threadsBusy: boolean;
+  /** Sightlines — how much is being withheld, and any leak in the latest reply. */
+  withheldCount: number;
+  sightlinesEnabled: boolean;
+  sightlinesBusy: boolean;
+  sightlineLeaks: SightlineLeak[];
+  leakSpeaker: string;
   theme: Theme;
   onToggleImmersive: () => void;
   onToggleFormatting: (enabled: boolean) => void;
@@ -91,7 +97,9 @@ interface ConversationPanelProps {
   onShowMemory: () => void;
   onShowCanon: () => void;
   onShowThreads: () => void;
+  onShowSightlines: () => void;
   onResolveContinuity: (action: "reroll" | "accept" | "dismiss") => void;
+  onResolveSightline: (action: "reroll" | "accept" | "dismiss") => void;
 }
 
 export function ConversationPanel({
@@ -136,6 +144,11 @@ export function ConversationPanel({
   pinnedThreadCount,
   threadsEnabled,
   threadsBusy,
+  withheldCount,
+  sightlinesEnabled,
+  sightlinesBusy,
+  sightlineLeaks,
+  leakSpeaker,
   theme,
   onToggleImmersive,
   onToggleFormatting,
@@ -163,7 +176,9 @@ export function ConversationPanel({
   onShowMemory,
   onShowCanon,
   onShowThreads,
-  onResolveContinuity
+  onShowSightlines,
+  onResolveContinuity,
+  onResolveSightline
 }: ConversationPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -430,7 +445,7 @@ export function ConversationPanel({
           <ActionMenu
             label="Story"
             icon={<IconBookOpen size={15} />}
-            active={continuityReports.length > 0}
+            active={continuityReports.length > 0 || sightlineLeaks.length > 0}
             panelWidth={310}
             title="Story tools, memory, canon, and settings"
           >
@@ -489,6 +504,24 @@ export function ConversationPanel({
                   trailing={continuityReports.length > 0 ? continuityReports.length : undefined}
                   restoreFocusOnClose={false}
                   onSelect={onShowCanon}
+                />
+                <MenuAction
+                  closeMenu={closeMenu}
+                  icon={<IconEye size={15} className={sightlinesBusy ? "spin" : undefined} />}
+                  label={sightlineLeaks.length > 0 ? "Someone knew too much" : "Sightlines"}
+                  status={sightlinesEnabled}
+                  description={
+                    withheldCount > 0
+                      ? `${withheldCount} ${withheldCount === 1 ? "thing" : "things"} withheld from someone`
+                      : "Keep each character to what they actually know"
+                  }
+                  trailing={
+                    sightlineLeaks.length > 0
+                      ? sightlineLeaks.length
+                      : withheldCount > 0 ? withheldCount : undefined
+                  }
+                  restoreFocusOnClose={false}
+                  onSelect={onShowSightlines}
                 />
                 <MenuAction
                   closeMenu={closeMenu}
@@ -775,8 +808,15 @@ export function ConversationPanel({
                       ? continuityReports
                       : undefined
                   }
+                  sightlineLeaks={
+                    idx === conversationHistory.length - 1 && msg.role === "assistant"
+                      ? sightlineLeaks
+                      : undefined
+                  }
+                  leakSpeaker={leakSpeaker}
                   theme={theme}
                   onResolveContinuity={onResolveContinuity}
+                  onResolveSightline={onResolveSightline}
                   onEdit={onEditMessage}
                   onSaveEdit={onSaveEdit}
                   onCancelEdit={onCancelEdit}

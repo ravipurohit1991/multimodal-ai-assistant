@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { startMic } from "./audio/mic";
 import { PcmPlayer } from "./audio/player";
 import { MicVAD } from "@ricky0123/vad-web";
-import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY, StoryThread, StoryThreadKind, StoryThreadsState } from "./types";
+import { ServerMsg, Message, VoiceInfo, InputMode, OutputMode, TtsEngine, LorebookEntry, ResponseLength, NarrationPerspective, Pacing, SceneState, Character, RiggedCharacter, StageAnimationDirective, MemoryState, DEFAULT_MEMORY, PresenceState, PresenceMode, DEFAULT_PRESENCE, PRESENCE_WAIT_FACTOR, CanonFact, ContinuityReport, ContinuityState, DEFAULT_CONTINUITY, StoryThread, StoryThreadKind, StoryThreadsState, SightlineEntry, SightlineLeak, SightlinesState } from "./types";
 import { ControlSidebar } from "./components/ControlSidebar";
 import { ConversationPanel } from "./components/ConversationPanel";
 import { ModelStatusPanel } from "./components/ModelStatusPanel";
@@ -19,12 +19,14 @@ import { MemoryModal } from "./components/MemoryModal";
 import { CanonModal } from "./components/CanonModal";
 import { SessionsModal } from "./components/SessionsModal";
 import { StoryThreadsModal } from "./components/StoryThreadsModal";
+import { SightlinesModal } from "./components/SightlinesModal";
 import { downloadJson, downloadText, readJsonFile } from "./io";
 import { getTheme, applyThemeToDocument } from "./theme";
 import { buildAmbient } from "./atmosphere";
 import { moodToColor } from "./mood";
 import { Soundscape } from "./soundscape";
 import { countStoryThreads, normalizeStoryThreadsState } from "./storyThreads";
+import { countSightlines, normalizeSightlinesState, serializeSightlines, type SightlineDraft } from "./sightlines";
 import { createGeneratedRig, createUploadedRig } from "./rigs";
 import { upgradeRoleplayPrompt } from "./prompts";
 import { wipeBrowserPersistence } from "./persistence";
@@ -229,6 +231,21 @@ export default function App() {
   const storyThreadCounts = useMemo(
     () => countStoryThreads(storyThreads.threads),
     [storyThreads.threads],
+  );
+  // Sightlines — who in this story knows what. The ledger and the participant
+  // list are backend-owned (only it can say who an audience may name), but the
+  // ledger travels with the story; an open leak deliberately does not, since it
+  // is about one specific reply.
+  const [sightlines, setSightlines] = useState<SightlinesState>(() => (
+    normalizeSightlinesState(savedSettings.sightlines)
+  ));
+  const [sightlinesBusy, setSightlinesBusy] = useState(false);
+  const [sightlineLeaks, setSightlineLeaks] = useState<SightlineLeak[]>([]);
+  const [leakSpeaker, setLeakSpeaker] = useState("");
+  const [showSightlines, setShowSightlines] = useState(false);
+  const sightlineCounts = useMemo(
+    () => countSightlines(sightlines.entries, sightlines.participants),
+    [sightlines.entries, sightlines.participants],
   );
   const [includeMood, setIncludeMood] = useState<boolean>(savedSettings.includeMood || false);
   const [adultMode, setAdultMode] = useState<boolean>(savedSettings.adultMode === true);
@@ -649,6 +666,28 @@ export default function App() {
         if (msg.type === "story_threads_status") {
           setStoryThreadsBusy(msg.busy);
         }
+        if (msg.type === "sightlines_updated") {
+          // The backend owns the ledger and the participant list; mirror its
+          // whole view so the two cannot drift after an edit or a reconnect.
+          setSightlines(normalizeSightlinesState({
+            enabled: msg.enabled,
+            auto: msg.auto,
+            entries: msg.entries || [],
+            participants: msg.participants || [],
+            covered: msg.covered,
+          }));
+        }
+        if (msg.type === "sightlines_status") {
+          setSightlinesBusy(msg.busy);
+        }
+        if (msg.type === "sightline_alert") {
+          setSightlineLeaks(msg.items || []);
+          setLeakSpeaker(msg.speaker || "");
+        }
+        if (msg.type === "sightline_resolved") {
+          setSightlineLeaks([]);
+          setLeakSpeaker("");
+        }
         if (msg.type === "image_generating") {
           console.log(`🎨 Generating image: ${msg.prompt}`);
           setAssistantText(current => current + "\n[Generating image...]");
@@ -1004,6 +1043,15 @@ export default function App() {
     syncHistoryToBackend(next);
   };
 
+  // Sightlines needs to know who is in the room: an audience only means
+  // something against the list of people who could be kept out of it. Sent
+  // whenever the scene's line-up changes, not only on reconnect.
+  useEffect(() => {
+    if (!connected) return;
+    sendJson({ type: "set_cast", names: inSceneCharacters.map((c) => c.name).filter(Boolean) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, inSceneCharacters.map((c) => c.name).join(" ")]);
+
   // Keep the selected character's roster entry in sync with the editable buffer.
   useEffect(() => {
     setCharacters((prev) => prev.map((c) => (
@@ -1206,6 +1254,10 @@ export default function App() {
     // Open dramatic questions belong to this transcript just as canon does.
     setStoryThreads((prev) => ({ ...prev, threads: [], covered: 0 }));
     setStoryThreadsBusy(false);
+    // So does who was being kept from what: the scene it belonged to is gone.
+    setSightlines((prev) => ({ ...prev, entries: [], covered: 0 }));
+    setSightlineLeaks([]);
+    setSightlinesBusy(false);
     pendingMoodRef.current = "";
     pendingAnimationRef.current = null;
   };
@@ -1221,7 +1273,7 @@ export default function App() {
       "This permanently erases all of it — there is NO undo:\n" +
       "• This conversation & history\n" +
       "• Every character in the cast + your persona\n" +
-      "• Story memory, story canon, story threads & bookmarks\n" +
+      "• Story memory, story canon, story threads, sightlines & bookmarks\n" +
       "• Lorebook, Author's Note, scene & every setting\n" +
       "• Saved stories, images, uploaded characters & logs on disk\n\n" +
       "Continue?"
@@ -1478,6 +1530,67 @@ export default function App() {
     updateStoryThreads(storyThreads.threads.filter((thread) => thread.status === "active"));
   };
 
+  // ----- Sightlines -----
+  // Canon says what is true and threads say what is open; this says who is in on
+  // it. The backend is authoritative about audiences, so every mutation is sent
+  // and the answer replaces local state rather than being merged into it.
+  const pushSightlineSettings = (patch: Partial<SightlinesState>) => {
+    const next = { ...sightlines, ...patch };
+    setSightlines(next);
+    if (patch.enabled === false) {
+      setSightlineLeaks([]);
+      setSightlinesBusy(false);
+    }
+    sendJson({ type: "set_sightlines", enabled: next.enabled, auto: next.auto });
+  };
+
+  const updateSightlineEntries = (entries: SightlineEntry[]) => {
+    setSightlines((prev) => ({ ...prev, entries }));
+    sendJson({ type: "set_sightline_entries", entries: serializeSightlines(entries) });
+  };
+
+  const addSightline = (draft: SightlineDraft) => {
+    sendJson({
+      type: "add_sightline",
+      text: draft.text,
+      topic: draft.topic,
+      knows: draft.knows,
+      // A secret the reader put there by hand always reaches the model.
+      pinned: true,
+    });
+  };
+
+  const harvestSightlines = () => {
+    if (!wsRef.current || sightlinesBusy || !sightlines.enabled) return;
+    setSightlinesBusy(true);
+    sendJson({ type: "harvest_sightlines" });
+  };
+
+  const checkSightlinesNow = () => {
+    if (!wsRef.current || sightlinesBusy || !sightlines.enabled) return;
+    setSightlinesBusy(true);
+    sendJson({ type: "check_sightlines", speaker_name: speakerNameForTurn() });
+  };
+
+  const forgetSightlines = () => {
+    setSightlines((prev) => ({ ...prev, entries: [], covered: 0 }));
+    setSightlineLeaks([]);
+    setSightlinesBusy(false);
+    sendJson({ type: "forget_sightlines" });
+  };
+
+  // What the reader decided about a reported leak. "Write it again" arms the
+  // correction on the backend and regenerates through the ordinary swipe path,
+  // so the previous take is kept rather than lost.
+  const resolveSightline = (action: "reroll" | "accept" | "dismiss") => {
+    sendJson({ type: "resolve_sightline", action });
+    setSightlineLeaks([]);
+    if (action === "reroll") {
+      const index = conversationHistory.length - 1;
+      if (conversationHistory[index]?.role === "assistant") generateSwipe(index);
+    }
+  };
+
   // What the reader decided about a reported contradiction. "Write it again"
   // arms the correction on the backend and then regenerates the reply through
   // the ordinary swipe path, so the previous take is kept rather than lost.
@@ -1714,6 +1827,7 @@ export default function App() {
     settings: {
       userName, userPersona, assistantName, systemPrompt, scenario, characterDef, personality,
       authorNote, authorNoteDepth, includeMood, adultMode, lorebook, memory, continuity, storyThreads,
+      sightlines,
       responseLength, narrationPerspective, pacing, scene, autoScene, presence,
       rigAssets, characters, selectedCharacterId,
       llmHost, llmModel, currentVoice, ttsEngine, outputMode,
@@ -1791,6 +1905,12 @@ export default function App() {
     const loadedStoryThreads = normalizeStoryThreadsState(s.storyThreads);
     setStoryThreads(loadedStoryThreads);
     setStoryThreadsBusy(false);
+    // Same for sightlines: opening one story must never leave another story's
+    // secrets in play, gagging characters about things that never happened here.
+    const loadedSightlines = normalizeSightlinesState(s.sightlines);
+    setSightlines(loadedSightlines);
+    setSightlineLeaks([]);
+    setSightlinesBusy(false);
     if (s.responseLength) setResponseLength(s.responseLength as ResponseLength);
     if (s.narrationPerspective) setNarrationPerspective(s.narrationPerspective as NarrationPerspective);
     if (s.pacing) setPacing(s.pacing as Pacing);
@@ -1913,6 +2033,13 @@ export default function App() {
         auto: loadedStoryThreads.auto,
         threads: serializeStoryThreads(loadedStoryThreads.threads),
         covered: loadedStoryThreads.covered,
+      });
+      sendJson({
+        type: "set_sightlines",
+        enabled: loadedSightlines.enabled,
+        auto: loadedSightlines.auto,
+        entries: serializeSightlines(loadedSightlines.entries),
+        covered: loadedSightlines.covered,
       });
     }
   };
@@ -2320,6 +2447,7 @@ export default function App() {
       memory,
       continuity,
       storyThreads,
+      sightlines,
       responseLength,
       narrationPerspective,
       pacing,
@@ -2340,7 +2468,7 @@ export default function App() {
       ttsEngine,
       outputMode,
     });
-  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, storyThreads, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
+  }, [themeName, userName, userPersona, assistantName, systemPrompt, characterDef, scenario, personality, authorNote, authorNoteDepth, includeMood, adultMode, stageEnabled, immersiveFormatting, lorebook, memory, continuity, storyThreads, sightlines, responseLength, narrationPerspective, pacing, scene, autoScene, fxEnabled, soundVolume, autoCast, immersive, rigAssets, characters, selectedCharacterId, userCharacterImage, assistantCharacterImage, llmHost, llmModel, currentVoice, ttsEngine, outputMode]);
 
   // End call when disconnected
   useEffect(() => {
@@ -2415,6 +2543,16 @@ export default function App() {
         auto: storyThreads.auto,
         threads: serializeStoryThreads(storyThreads.threads),
         covered: storyThreads.covered,
+      });
+      // Who knows what travels the same way. The cast goes first: an audience is
+      // only meaningful against the list of people in the scene.
+      sendJson({ type: "set_cast", names: inSceneCharacters.map((c) => c.name).filter(Boolean) });
+      sendJson({
+        type: "set_sightlines",
+        enabled: sightlines.enabled,
+        auto: sightlines.auto,
+        entries: serializeSightlines(sightlines.entries),
+        covered: sightlines.covered,
       });
       sendJson({ type: "set_style", response_length: responseLength, narration_perspective: narrationPerspective, pacing });
       sendJson({ type: "set_scene", time: scene.time, weather: scene.weather, location: scene.location });
@@ -2583,6 +2721,11 @@ export default function App() {
           pinnedThreadCount={storyThreadCounts.pinnedActive}
           threadsEnabled={storyThreads.enabled}
           threadsBusy={storyThreadsBusy}
+          withheldCount={sightlines.enabled ? sightlineCounts.private : 0}
+          sightlinesEnabled={sightlines.enabled}
+          sightlinesBusy={sightlinesBusy}
+          sightlineLeaks={sightlines.enabled ? sightlineLeaks : []}
+          leakSpeaker={leakSpeaker}
           theme={theme}
           onToggleImmersive={toggleImmersive}
           onToggleFormatting={toggleFormatting}
@@ -2618,7 +2761,9 @@ export default function App() {
           onShowMemory={() => setShowMemory(true)}
           onShowCanon={() => setShowCanon(true)}
           onShowThreads={() => setShowStoryThreads(true)}
+          onShowSightlines={() => setShowSightlines(true)}
           onResolveContinuity={resolveContinuity}
+          onResolveSightline={resolveSightline}
         />
 
         {/* Cast bar — who's in the scene / who speaks next */}
@@ -2768,6 +2913,24 @@ export default function App() {
         onRebuild={() => refreshStoryThreads(true)}
         onForget={forgetStoryThreads}
         onClearArchived={clearArchivedStoryThreads}
+      />
+
+      {/* Sightlines — who knows what, and who is being kept from it */}
+      <SightlinesModal
+        show={showSightlines}
+        sightlines={sightlines}
+        busy={sightlinesBusy}
+        connected={connected}
+        userName={userName}
+        theme={theme}
+        onClose={() => setShowSightlines(false)}
+        onToggleEnabled={(enabled) => pushSightlineSettings({ enabled })}
+        onToggleAuto={(auto) => pushSightlineSettings({ auto })}
+        onEntriesChange={updateSightlineEntries}
+        onAdd={addSightline}
+        onHarvest={harvestSightlines}
+        onCheckNow={checkSightlinesNow}
+        onForget={forgetSightlines}
       />
 
       {/* Character roster / cast manager */}

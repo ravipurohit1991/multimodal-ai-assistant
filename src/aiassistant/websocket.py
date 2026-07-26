@@ -69,11 +69,47 @@ from aiassistant.roleplay import (
     parse_scene_tag,
     presence_max_beats,
 )
+from aiassistant.sightlines import (
+    HARVEST_TIMEOUT_SECONDS as SIGHTLINE_HARVEST_TIMEOUT_SECONDS,
+)
+from aiassistant.sightlines import (
+    REVIEW_TIMEOUT_SECONDS as SIGHTLINE_REVIEW_TIMEOUT_SECONDS,
+)
+from aiassistant.sightlines import (
+    build_leak_note,
+    grant_knowledge,
+    reset_sightlines,
+)
+from aiassistant.sightlines import (
+    harvest_sightlines as harvest_sightline_entries,
+)
+from aiassistant.sightlines import (
+    merge_entries as merge_sightline_entries,
+)
+from aiassistant.sightlines import (
+    new_entry as new_sightline_entry,
+)
+from aiassistant.sightlines import (
+    normalize_entries as normalize_sightline_entries,
+)
+from aiassistant.sightlines import (
+    participants as sightline_participants,
+)
+from aiassistant.sightlines import (
+    rebuild_sightlines as rebuild_sightline_entries,
+)
+from aiassistant.sightlines import (
+    review_reply as review_sightlines,
+)
+from aiassistant.sightlines import (
+    should_review as should_review_sightlines,
+)
 from aiassistant.state import (
     ConnState,
     cancel_continuity,
     cancel_llm,
     cancel_memory,
+    cancel_sightlines,
     cancel_story_threads,
     wipe_connection_state,
 )
@@ -436,6 +472,129 @@ async def ws_endpoint(ws: WebSocket):
         )
         return True
 
+    def sightlines_state_payload(extra: dict | None = None) -> dict:
+        """The client's whole view of Sightlines, sent after every change.
+
+        The participant list travels with it: the browser owns the roster, but the
+        backend is the one that decides which names an entry's audience may name,
+        so the UI must build its grid from the same list the ledger was filtered
+        against.
+        """
+        payload = {
+            "type": "sightlines_updated",
+            "entries": state.sightlines,
+            "enabled": state.sightlines_enabled,
+            "auto": state.sightlines_auto,
+            "participants": sightline_participants(state),
+            "covered": state.sightlines_covered,
+            "total": len(conversation_messages(state)),
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def run_sightlines_check(reply_text: str, speaker: str):
+        """One check of the latest reply for leaked knowledge, reported to the UI.
+
+        A leak is only ever *reported*. Knowledge that plainly changed hands in
+        the passage is applied, because that is the story saying so rather than a
+        judgement call — but a character using something they were never told is
+        the user's to resolve.
+        """
+        try:
+            await send_json({"type": "sightlines_status", "busy": True})
+            async with state.auxiliary_lock:
+                result = await asyncio.wait_for(
+                    review_sightlines(state, reply_text, speaker),
+                    timeout=SIGHTLINE_REVIEW_TIMEOUT_SECONDS,
+                )
+            if result is None:
+                return
+
+            granted = 0
+            for transfer in result["learned"]:
+                if grant_knowledge(state, transfer["entry_id"], transfer["who"]):
+                    granted += 1
+            state.sightlines_covered = len(conversation_messages(state))
+
+            leaks = result["leaks"]
+            if leaks:
+                state.sightline_alert = {"items": leaks, "speaker": speaker}
+                logger.info(f"Sightlines: {len(leaks)} leak(s) in the latest reply")
+                await send_json({"type": "sightline_alert", "items": leaks, "speaker": speaker})
+            else:
+                state.sightline_alert = None
+            if granted:
+                logger.info(f"Sightlines: knowledge changed hands {granted} time(s)")
+            if granted or leaks:
+                await send_json(sightlines_state_payload())
+        except asyncio.CancelledError:
+            logger.info("Sightlines check cancelled")
+            raise
+        except TimeoutError:
+            logger.error(f"Sightlines check timed out after {SIGHTLINE_REVIEW_TIMEOUT_SECONDS}s")
+        except Exception as e:
+            logger.error(f"Sightlines check failed: {e}")
+        finally:
+            try:
+                await send_json({"type": "sightlines_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
+    def schedule_sightlines_check(reply_text: str, speaker: str, force: bool = False) -> bool:
+        """Start a check in the background, at most one at a time.
+
+        Fire-and-forget and kept out of ``state.llm_task``, like every other piece
+        of upkeep: the user should never wait on — or accidentally cancel — a
+        background check by sending their next message.
+        """
+        if not state.sightlines_enabled:
+            return False
+        if not force and not should_review_sightlines(state):
+            return False
+        if state.sightlines_task and not state.sightlines_task.done():
+            return False
+        if not reply_text.strip():
+            return False
+        state.sightlines_task = asyncio.create_task(run_sightlines_check(reply_text, speaker))
+        return True
+
+    async def run_sightlines_harvest():
+        """Read the whole story and map who has been kept out of what."""
+        try:
+            await send_json({"type": "sightlines_status", "busy": True})
+            async with state.auxiliary_lock:
+                entries = await asyncio.wait_for(
+                    harvest_sightline_entries(state),
+                    timeout=SIGHTLINE_HARVEST_TIMEOUT_SECONDS,
+                )
+            if not entries:
+                await send_json(sightlines_state_payload({"unchanged": True}))
+                return
+            state.sightlines, added = rebuild_sightline_entries(state.sightlines, entries)
+            state.sightlines_covered = len(conversation_messages(state))
+            logger.info(
+                f"Sightlines rebuilt from the story: {added} entr(ies) read, "
+                f"ledger now {len(state.sightlines)}"
+            )
+            await send_json(sightlines_state_payload({"added": added}))
+        except asyncio.CancelledError:
+            logger.info("Sightlines harvest cancelled")
+            raise
+        except TimeoutError:
+            logger.error(
+                f"Sightlines harvest timed out after {SIGHTLINE_HARVEST_TIMEOUT_SECONDS}s"
+            )
+            await send_json(sightlines_state_payload({"unchanged": True}))
+        except Exception as e:
+            logger.error(f"Sightlines harvest failed: {e}")
+            await send_json(sightlines_state_payload({"unchanged": True}))
+        finally:
+            try:
+                await send_json({"type": "sightlines_status", "busy": False})
+            except Exception:
+                pass  # connection likely gone
+
     async def process_text_message(
         user_text: str,
         image_base64: str | None = None,
@@ -600,7 +759,9 @@ async def ws_endpoint(ws: WebSocket):
         # Lorebook knowledge, the Author's Note, and the Director/scene-style
         # directive injected, honoring context mode.
         llm_messages = build_llm_messages(
-            state, no_context_user_text=None if unprompted else user_message_content
+            state,
+            no_context_user_text=None if unprompted else user_message_content,
+            speaker=speaker_name,
         )
         # The Director's one-shot beat steers exactly one reply, then is cleared.
         if state.director_beat:
@@ -612,6 +773,10 @@ async def ws_endpoint(ws: WebSocket):
         if state.continuity_note:
             logger.info("Continuity correction applied to this generation")
             state.continuity_note = ""
+        # A leak correction is consumed the same way, for the same reason.
+        if state.sightline_note:
+            logger.info("Knowledge correction applied to this generation")
+            state.sightline_note = ""
 
         # Narrator turns: tell the model the latest message is omniscient stage
         # direction, not the user speaking, so it reacts rather than replying to it.
@@ -943,6 +1108,12 @@ async def ws_endpoint(ws: WebSocket):
             if schedule_continuity_check(stored_full):
                 logger.info("Continuity check queued for the latest reply")
 
+            # Sightlines reads the same reply for knowledge its speaker should not
+            # have had. It only spends a pass when something is actually being
+            # withheld from someone, so an ordinary scene never pays for it.
+            if schedule_sightlines_check(stored_full, speaker_name or state.char_name):
+                logger.info("Sightlines check queued for the latest reply")
+
             # Story Threads reads the newly completed turn after it is visible.
             # Its worker coalesces if another turn arrives before this pass wins
             # the shared auxiliary-model lock.
@@ -1093,18 +1264,21 @@ async def ws_endpoint(ws: WebSocket):
                     await cancel_story_threads(state)
                     state.messages = system_msgs
                     # The running memory describes a story that no longer exists,
-                    # and so do its canon and unresolved threads.
+                    # and so do its canon, unresolved threads, and sightlines.
                     await cancel_memory(state)
                     reset_memory(state)
                     await cancel_continuity(state)
                     reset_canon(state)
                     reset_story_threads(state)
+                    await cancel_sightlines(state)
+                    reset_sightlines(state)
                     state.presence_beats = 0
                     logger.info("Chat history cleared")
                     await send_json({"type": "chat_cleared"})
                     await send_json(memory_state_payload())
                     await send_json(canon_state_payload())
                     await send_json(story_threads_state_payload())
+                    await send_json(sightlines_state_payload())
 
                 elif mtype == "wipe_all":
                     # Nuke everything: cancel any work, reset this connection's
@@ -1130,6 +1304,7 @@ async def ws_endpoint(ws: WebSocket):
                         await send_json(memory_state_payload())
                         await send_json(canon_state_payload())
                         await send_json(story_threads_state_payload())
+                        await send_json(sightlines_state_payload())
                         await send_json({"type": "wiped_all", "summary": summary})
 
                 elif mtype == "sync_history":
@@ -1151,6 +1326,15 @@ async def ws_endpoint(ws: WebSocket):
                     state.presence_beats = 0
                     state.continuity_alert = None
                     state.canon_covered = min(state.canon_covered, len(history))
+                    # A leak reported against a passage that may no longer exist is
+                    # retracted rather than left hanging over the story. The ledger
+                    # itself survives: unlike a derived thread, who knows what is
+                    # largely the user's own dramatic decision, and rewinding a
+                    # scene does not unmake it.
+                    await cancel_sightlines(state)
+                    state.sightline_alert = None
+                    state.sightline_note = ""
+                    state.sightlines_covered = min(state.sightlines_covered, len(history))
                     # Any indexed passage may have been deleted. Derived threads
                     # cannot prove their own removal during incremental catch-up,
                     # so discard them rather than inject stale possibilities into
@@ -1392,6 +1576,142 @@ async def ws_endpoint(ws: WebSocket):
                     reset_story_threads(state)
                     logger.info("Story threads cleared by user")
                     await send_json(story_threads_state_payload())
+
+                elif mtype == "set_cast":
+                    # The in-scene cast. The roster lives in the browser; the
+                    # backend needs the names so Sightlines can tell who is being
+                    # kept out of what, and so a model can never invent a knower.
+                    names = data.get("names")
+                    state.cast = [
+                        name.strip()
+                        for name in (names if isinstance(names, list) else [])
+                        if isinstance(name, str) and name.strip()
+                    ]
+                    logger.info(
+                        f"Cast in scene: {', '.join(state.cast) if state.cast else '(solo)'}"
+                    )
+                    await send_json(sightlines_state_payload())
+
+                elif mtype == "set_sightlines":
+                    # Settings, plus the restored ledger when a saved story (or a
+                    # reconnecting browser) brings its sightlines back.
+                    if "enabled" in data:
+                        state.sightlines_enabled = bool(data.get("enabled"))
+                        if not state.sightlines_enabled:
+                            # Nothing half-flagged survives switching it off.
+                            await cancel_sightlines(state)
+                            state.sightline_alert = None
+                            state.sightline_note = ""
+                    if "auto" in data:
+                        state.sightlines_auto = bool(data.get("auto"))
+                    if "entries" in data:
+                        state.sightlines = normalize_sightline_entries(data.get("entries"))
+                    if isinstance(data.get("covered"), int):
+                        state.sightlines_covered = max(0, int(data["covered"]))
+                    logger.info(
+                        f"Sightlines: {'on' if state.sightlines_enabled else 'off'}, "
+                        f"auto={'on' if state.sightlines_auto else 'off'}, "
+                        f"{len(state.sightlines)} entr(ies)"
+                    )
+                    await send_json(sightlines_state_payload())
+
+                elif mtype == "set_sightline_entries":
+                    # The ledger edited by hand: a reworded secret, a changed
+                    # audience, a pin, a deletion.
+                    state.sightlines = normalize_sightline_entries(data.get("entries"))
+                    logger.info(f"Sightlines edited by user: {len(state.sightlines)} entr(ies)")
+                    await send_json(sightlines_state_payload())
+
+                elif mtype == "add_sightline":
+                    text = str(data.get("text", "") or "").strip()
+                    if text:
+                        everyone = sightline_participants(state)
+                        raw_knows = data.get("knows")
+                        entry = new_sightline_entry(
+                            text,
+                            topic=str(data.get("topic", "") or ""),
+                            # An audience the UI does not supply defaults to the
+                            # whole room: a new entry starts out as ordinary shared
+                            # context, and becomes a secret only when the user says
+                            # who is being kept out of it. A user-supplied audience
+                            # is *not* narrowed to the current scene — a cast member
+                            # who steps out for a scene must not silently forget
+                            # what they were told. Only the model is held to the
+                            # participant list, in ``parse_learned`` and friends.
+                            knows=raw_knows if isinstance(raw_knows, list) else everyone,
+                            turn=len(conversation_messages(state)),
+                            pinned=bool(data.get("pinned", True)),
+                        )
+                        state.sightlines, _ = merge_sightline_entries(state.sightlines, [entry])
+                        logger.info(f"Sightline added by user: {text[:80]}")
+                    await send_json(sightlines_state_payload())
+
+                elif mtype == "harvest_sightlines":
+                    # "Read the story" — map who knows what from the whole
+                    # transcript, so Sightlines can be adopted forty turns in.
+                    if not state.sightlines_enabled:
+                        await send_json(sightlines_state_payload({"unchanged": True}))
+                    elif state.sightlines_task and not state.sightlines_task.done():
+                        logger.info("Sightlines pass already running; ignoring harvest request")
+                    else:
+                        state.sightlines_task = asyncio.create_task(run_sightlines_harvest())
+
+                elif mtype == "check_sightlines":
+                    # "Check now" — read the latest reply even when automatic
+                    # checking is off.
+                    last_reply = next(
+                        (
+                            m.get("content", "")
+                            for m in reversed(state.messages)
+                            if m.get("role") == "assistant"
+                        ),
+                        "",
+                    )
+                    # A stored group reply carries its speaker as a "Name: " prefix.
+                    speaker = str(data.get("speaker_name", "") or "").strip()
+                    if not speaker and ":" in last_reply[:60]:
+                        candidate = last_reply.split(":", 1)[0].strip()
+                        if any(candidate.casefold() == c.casefold() for c in state.cast):
+                            speaker = candidate
+                    if not state.sightlines_enabled:
+                        await send_json(sightlines_state_payload({"unchanged": True}))
+                    elif not schedule_sightlines_check(
+                        last_reply, speaker or state.char_name, force=True
+                    ):
+                        logger.info("Sightlines check already running (or nothing to check)")
+
+                elif mtype == "forget_sightlines":
+                    await cancel_sightlines(state)
+                    reset_sightlines(state)
+                    logger.info("Sightlines cleared by user")
+                    await send_json(sightlines_state_payload())
+
+                elif mtype == "resolve_sightline":
+                    # What the user decided about a reported leak. Sightlines
+                    # reports; this is where the story actually changes.
+                    action = str(data.get("action", "") or "").strip().lower()
+                    alert = state.sightline_alert or {}
+                    items = alert.get("items", [])
+                    speaker = alert.get("speaker", "") or state.char_name
+
+                    if action == "reroll":
+                        # Arm the correction; the UI then regenerates the reply as
+                        # an ordinary swipe, and the note is consumed by that turn.
+                        state.sightline_note = build_leak_note(items, state.user_name)
+                    elif action == "accept":
+                        # "They know it now": the reply stands, and the ledger is
+                        # widened to make it true rather than left contradicting it.
+                        granted = 0
+                        for item in items:
+                            if grant_knowledge(state, item.get("entry_id", ""), speaker):
+                                granted += 1
+                        logger.info(
+                            f"Sightlines widened to match the latest reply ({granted} entr(ies))"
+                        )
+                        await send_json(sightlines_state_payload())
+
+                    state.sightline_alert = None
+                    await send_json({"type": "sightline_resolved", "action": action or "dismiss"})
 
                 elif mtype == "resolve_continuity":
                     # What the user decided about a reported contradiction. The
@@ -1703,11 +2023,21 @@ async def ws_endpoint(ws: WebSocket):
                     if not candidates:
                         await send_json({"type": "speaker_chosen", "name": ""})
                         continue
+                    # Auto-cast is the only place the browser names the whole
+                    # in-scene cast on every turn; keep the backend's copy current
+                    # from it, so Sightlines never lags a roster change.
+                    state.cast = list(candidates)
+                    chooser_user_name = str(data.get("user_name", "") or "") or state.user_name
 
-                    async def choose_speaker_task(candidates: list[str] = candidates):
+                    async def choose_speaker_task(
+                        candidates: list[str] = candidates,
+                        user_name: str = chooser_user_name,
+                    ):
                         try:
                             convo = [m for m in state.messages if m.get("role") != "system"][-8:]
-                            prompt_messages = build_speaker_selection_messages(candidates, convo)
+                            prompt_messages = build_speaker_selection_messages(
+                                candidates, convo, user_name
+                            )
                             raw = ""
                             temp_client = OllamaClient(
                                 host=state.llm_host, default_model=state.llm_model
@@ -1822,6 +2152,7 @@ async def ws_endpoint(ws: WebSocket):
         await cancel_memory(state)
         await cancel_continuity(state)
         await cancel_story_threads(state)
+        await cancel_sightlines(state)
         return
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
@@ -1832,4 +2163,5 @@ async def ws_endpoint(ws: WebSocket):
         await cancel_memory(state)
         await cancel_continuity(state)
         await cancel_story_threads(state)
+        await cancel_sightlines(state)
         return

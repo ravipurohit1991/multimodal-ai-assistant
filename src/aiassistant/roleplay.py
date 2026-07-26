@@ -15,6 +15,7 @@ import re
 from aiassistant.continuity import build_canon_block
 from aiassistant.memory import build_memory_block, memory_cursor
 from aiassistant.prompts import build_final_reply_reminder
+from aiassistant.sightlines import build_sightlines_block
 from aiassistant.story_threads import build_story_threads_block
 
 # {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
@@ -379,14 +380,21 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
     )
 
 
-def build_llm_messages(state, no_context_user_text: str | None = None) -> list[dict]:
+def build_llm_messages(
+    state, no_context_user_text: str | None = None, speaker: str = ""
+) -> list[dict]:
     """Assemble the message list sent to the LLM for a normal turn.
 
     Order: system prompt(s) → Story Memory → Lorebook knowledge → scene → canon
     → open Story Threads → history (with the Author's Note inserted a few turns
-    from the end) → Director/scene-style directive → final response-contract
-    reminder. The returned list is always a fresh copy, so ``state.messages``
-    stays clean.
+    from the end) → Director/scene-style directive → Sightlines → final
+    response-contract reminder. The returned list is always a fresh copy, so
+    ``state.messages`` stays clean.
+
+    ``speaker`` is the cast member about to answer (empty in a solo scene). It is
+    the only part of this assembly that is not global: every other block says the
+    same thing to whoever is speaking, while Sightlines is built for one
+    character and deliberately withholds what that character was never told.
     """
     char = getattr(state, "char_name", "") or ""
     user = getattr(state, "user_name", "") or ""
@@ -470,12 +478,25 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
     if style_block:
         messages.append({"role": "system", "content": style_block})
 
+    # Sightlines sits after the history on purpose. Everything above it is full
+    # of material this character may have no right to — the canon, the memory,
+    # the transcript of a scene they were absent from — so the instruction saying
+    # which of it is theirs has to be the more recent of the two.
+    sightlines_block = build_sightlines_block(state, speaker or char)
+    if sightlines_block:
+        messages.append({"role": "system", "content": sightlines_block})
+
     # A continuity correction is armed for exactly one regeneration, and sits
     # last of the steering blocks: the model has just proved that reading the
     # canon once was not enough, so this one gets the strongest position.
     note = (getattr(state, "continuity_note", "") or "").strip()
     if note:
         messages.append({"role": "system", "content": apply_placeholders(note, char, user)})
+
+    # A leak correction is armed the same way, for the same reason.
+    leak_note = (getattr(state, "sightline_note", "") or "").strip()
+    if leak_note:
+        messages.append({"role": "system", "content": apply_placeholders(leak_note, char, user)})
 
     # Reassert the small invariant contract after dynamic lore, author notes, and
     # director cues. This helps local models follow the rules even with long cards.
@@ -487,6 +508,7 @@ def build_llm_messages(state, no_context_user_text: str | None = None) -> list[d
                 auto_scene=bool(getattr(state, "auto_scene", False)),
                 animation=bool(getattr(state, "include_animation", False)),
                 adult_mode=bool(getattr(state, "adult_mode", False)),
+                sightlines=bool(sightlines_block),
             ),
         }
     )

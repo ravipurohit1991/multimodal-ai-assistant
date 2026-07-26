@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sightlines** — the story now knows who knows what. Story Memory, the Continuity
+  Guard, and Story Threads are all global: each assembles one block and sends it
+  unchanged to whoever is speaking, which quietly makes every cast member omniscient.
+  A new ledger (`src/aiassistant/sightlines.py`) gives each piece of knowledge an
+  *audience*, and `build_llm_messages` is now speaker-aware. Someone in the audience
+  is told the entry in full, plus who else shares it and who does not, so they can act
+  on a secret or guard it. Anyone outside it is shown a **spoiler-free `topic`** and
+  never the `text` — a model cannot be told "you do not know X" by being told X, which
+  is the whole mechanism. The block rides after the history, so the instruction saying
+  which of the surrounding context is theirs is the more recent of the two.
+  Optionally, one background pass then reads each reply for two things: a *leak* (the
+  speaker acted on something they were never told) and a *transfer* (someone was told,
+  or overheard, something new). Both must quote the passage verbatim to be believed,
+  and a leak is only ever reported — against the message that caused it, while it is
+  still the last thing said — with the same three ways out the Continuity Guard offers:
+  write it again (a one-shot correction that names the topic, never the secret), decide
+  they know it now, or leave it. A transfer the passage plainly shows *is* applied,
+  because that is the story saying so rather than a judgement call.
+  A who-knows-what workspace opens from the Story menu: record a secret by hand, toggle
+  each participant in or out of its audience, search, pin, or read an existing story to
+  map what has already been withheld. You can be kept out of an entry too — it stays
+  covered behind a reveal, so your own roleplay can still surprise you. Holding
+  characters to what they know is on by default and costs nothing: an empty ledger, or
+  one where everyone knows everything, produces no block and a prompt identical to
+  before. Only the watching half spends a generation, and it is opt-in and skipped
+  entirely when nothing is being withheld. A user-authored audience is never narrowed
+  to the current cast, so a character who steps out of a scene does not forget what
+  they were told; only the model is held to the participant list, so it can never
+  invent a knower. The ledger travels with saved stories and reconnects.
+
+### Changed
+- **Prompts** — the roleplay contract now tells the character to write only from what
+  they could plausibly know, and to play the gap honestly rather than quietly using
+  information they were never given in the story. The final reply check adds a
+  knowledge line when something is being withheld, where recency matters most.
+  Story Memory now records who was present and who learned (or was kept from learning)
+  each development, so a later scene knows not only what is true but who has been told.
+  Auto-cast speaker selection was rewritten as ordered rules — someone addressed by
+  name answers, otherwise whoever has the strongest stake, otherwise whoever has been
+  quiet — and it now receives the user's name, which the frontend had always sent and
+  the prompt had always discarded.
+
 - **Story threads** — an evidence-backed dramatic ledger now follows the promises,
   mysteries, goals, threats, secrets, and relationship tensions that remain in play.
   It is deliberately separate from canon: threads are possibilities rather than facts,
