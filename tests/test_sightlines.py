@@ -2,13 +2,13 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import aiassistant.sightlines as sightlines_module
-from aiassistant.prompts import (
+import personaparlour.sightlines as sightlines_module
+from personaparlour.prompts import (
     build_sightline_harvest_messages,
     build_sightline_review_messages,
 )
-from aiassistant.roleplay import build_llm_messages
-from aiassistant.sightlines import (
+from personaparlour.roleplay import build_llm_messages
+from personaparlour.sightlines import (
     SIGHTLINE_PROMPT_LIMIT,
     USER_TOKEN,
     _parse_json_object,

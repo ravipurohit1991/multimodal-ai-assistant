@@ -34,16 +34,16 @@ class ScriptedWebSocket:
 def _load_websocket_module_without_real_engines(monkeypatch):
     """Import orchestration without initializing Whisper/Piper model assets."""
 
-    fake_manager_module = ModuleType("aiassistant.engine_manager")
+    fake_manager_module = ModuleType("personaparlour.engine_manager")
     fake_manager_module.engine_manager = SimpleNamespace(
         stt_engine=object(),
         tts_engine=object(),
         image_explainer=None,
         image_generator=None,
     )
-    monkeypatch.setitem(sys.modules, "aiassistant.engine_manager", fake_manager_module)
-    sys.modules.pop("aiassistant.websocket", None)
-    return importlib.import_module("aiassistant.websocket")
+    monkeypatch.setitem(sys.modules, "personaparlour.engine_manager", fake_manager_module)
+    sys.modules.pop("personaparlour.websocket", None)
+    return importlib.import_module("personaparlour.websocket")
 
 
 def run_socket(monkeypatch, frames: list[dict]) -> ScriptedWebSocket:
@@ -52,7 +52,7 @@ def run_socket(monkeypatch, frames: list[dict]) -> ScriptedWebSocket:
     try:
         asyncio.run(websocket_module.ws_endpoint(socket))
     finally:
-        sys.modules.pop("aiassistant.websocket", None)
+        sys.modules.pop("personaparlour.websocket", None)
     return socket
 
 
@@ -267,7 +267,7 @@ def card_frames(socket: ScriptedWebSocket) -> list[dict]:
 
 
 def test_an_invented_card_comes_back_over_the_socket(monkeypatch):
-    import aiassistant.character_cards as cards_module
+    import personaparlour.character_cards as cards_module
 
     async def fake_generate(state, messages):
         return json.dumps(
@@ -298,7 +298,7 @@ def test_an_invented_card_comes_back_over_the_socket(monkeypatch):
 
 
 def test_an_unusable_answer_is_reported_rather_than_left_spinning(monkeypatch):
-    import aiassistant.character_cards as cards_module
+    import personaparlour.character_cards as cards_module
 
     async def fake_generate(state, messages):
         return "I'm afraid I can't do that."
@@ -320,7 +320,7 @@ def test_an_unusable_answer_is_reported_rather_than_left_spinning(monkeypatch):
 
 
 def test_an_invented_name_is_kept_clear_of_the_existing_cast(monkeypatch):
-    import aiassistant.character_cards as cards_module
+    import personaparlour.character_cards as cards_module
 
     async def fake_generate(state, messages):
         return json.dumps({"name": "Mira", "description": "Another one entirely."})

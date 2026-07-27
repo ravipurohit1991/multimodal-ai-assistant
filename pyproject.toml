@@ -1,14 +1,14 @@
 [project]
-name = "aiassistant"
+name = "personaparlour"
 version = "0.2.0"
-description = "Multimodal AI Assistant with TTS, STT, LLM, and Image Generation/Understanding capabilities"
+description = "A private, local-first character roleplay and storytelling workspace with voice, vision, and image generation"
 authors = [
     {name = "Ravi PURUSHOTTAM", email = "ravi.purushottamrajpurohit@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
-keywords = ["ai", "assistant", "tts", "stt", "llm", "multimodal", "image-generation"]
+keywords = ["ai", "roleplay", "characters", "storytelling", "tts", "stt", "llm", "multimodal"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -87,16 +87,16 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ravipurohit1991/multimodal-ai-assistant"
-Repository = "https://github.com/ravipurohit1991/multimodal-ai-assistant"
-Issues = "https://github.com/ravipurohit1991/multimodal-ai-assistant/issues"
+Homepage = "https://github.com/ravipurohit1991/PersonaParlour"
+Repository = "https://github.com/ravipurohit1991/PersonaParlour"
+Issues = "https://github.com/ravipurohit1991/PersonaParlour/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/aiassistant/__init__.py"
+path = "src/personaparlour/__init__.py"
 
 [tool.hatch.build.hooks.custom]
 
@@ -106,7 +106,7 @@ path = "src/aiassistant/__init__.py"
 [tool.hatch.build.targets.wheel]
 include = ["src/*"]
 exclude = ["src/*.py", ".env"]
-force-include = { dist = "aiassistant/frontend" }
+force-include = { dist = "personaparlour/frontend" }
 
 [tool.hatch.build.targets.sdist]
 include = [

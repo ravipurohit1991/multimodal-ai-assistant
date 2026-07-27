@@ -8,7 +8,7 @@
             "name": "Launch Backend",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/src/aiassistant/app.py",
+            "program": "${workspaceFolder}/src/personaparlour/app.py",
             "console": "integratedTerminal",
             "stopOnEntry": false,
             "justMyCode": true

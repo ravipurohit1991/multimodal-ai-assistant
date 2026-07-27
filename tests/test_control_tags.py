@@ -1,4 +1,4 @@
-from aiassistant.control_tags import (
+from personaparlour.control_tags import (
     StreamingHiddenTagFilter,
     find_animation_tag_body,
     parse_animation_tag,
@@ -77,7 +77,7 @@ def test_streamed_json_animation_tag_is_hidden_entirely():
 # model then copies that label into its own next reply. Left alone the transcript
 # fills with "Mira: Mira: *she turns*".
 
-from aiassistant.control_tags import (  # noqa: E402
+from personaparlour.control_tags import (  # noqa: E402
     StreamingSpeakerPrefixFilter,
     strip_speaker_prefix,
 )

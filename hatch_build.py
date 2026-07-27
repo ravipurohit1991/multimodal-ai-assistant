@@ -9,7 +9,7 @@ from typing import Any
 try:
     from hatchling.builders.hooks.plugin.interface import BuildHookInterface  # type: ignore
 except ImportError:
-    raise ImportError("hatchling is required for building the AI Assistant frontend")
+    raise ImportError("hatchling is required for building the PersonaParlour frontend")
 
 
 class FrontendBuildHook(BuildHookInterface):
@@ -20,11 +20,11 @@ class FrontendBuildHook(BuildHookInterface):
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         """Initialize build process when invoked by the build system."""
-        sys.stderr.write("Building AI Assistant frontend\n")
+        sys.stderr.write("Building PersonaParlour frontend\n")
 
         self.source_dir = Path("frontend")
         self.output_dir = Path("dist")
-        self.target_dir = Path("src/aiassistant/frontend")
+        self.target_dir = Path("src/personaparlour/frontend")
 
         self.compile_frontend_assets()
 
@@ -47,10 +47,10 @@ class FrontendBuildHook(BuildHookInterface):
     def deploy_compiled_assets(self) -> None:
         """Deploy compiled assets to the target package directory."""
         if self.target_dir.exists():
-            sys.stderr.write("Removing existing frontend folder from src/aiassistant\n")
+            sys.stderr.write("Removing existing frontend folder from src/personaparlour\n")
             cleanup_destination_dir(self.target_dir)
 
-        sys.stderr.write("Copying compiled frontend to src/aiassistant/frontend\n")
+        sys.stderr.write("Copying compiled frontend to src/personaparlour/frontend\n")
         transfer_build_output(self.output_dir, self.target_dir)
 
         if not self.target_dir.exists():
@@ -73,7 +73,7 @@ def locate_npm_binary() -> str:
     """Locate the npm binary in the system path."""
     npm_path = shutil.which("npm")
     if npm_path is None:
-        raise RuntimeError("NodeJS npm required for building AI Assistant frontend was not found")
+        raise RuntimeError("NodeJS npm required for building PersonaParlour frontend was not found")
     return npm_path
 
 
@@ -117,4 +117,4 @@ def transfer_build_output(source_path: Path, destination_path: Path) -> None:
     try:
         shutil.copytree(source_path, destination_path)
     except Exception as error:
-        raise RuntimeError(f"Failed to copy frontend to src/aiassistant: {error}")
+        raise RuntimeError(f"Failed to copy frontend to src/personaparlour: {error}")

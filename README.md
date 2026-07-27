@@ -1,10 +1,10 @@
-# Multimodal AI Assistant
+# PersonaParlour
 
 > A fully-featured (I would like to think so) AI companion (or a poor man's version of AI Girlfriend) that sees, speaks, and creates—all running locally on your machine.
 
 ## What is This?
 
-Ever wanted an AI assistant, one that you can set a personality and interact ? One that you can **talk to naturally**, **show images**, and have it **generate visuals** in response? This multimodal AI assistant brings together the best of modern (whatever that is based on my limited understanding) AI capabilities into one seamless (when you have high end PC) experience.
+PersonaParlour is a local-first character roleplay and storytelling workspace. Create personalities, **talk to them naturally**, **share images**, and let them **generate visuals** as your stories unfold.
 
 **Note**: This project is being vibe coded (including this ReadMe as well)—built organically and iteratively as ideas flow.
 
@@ -12,7 +12,7 @@ Ever wanted an AI assistant, one that you can set a personality and interact ? O
 
 The story workspace keeps local model and voice controls around a focused, cinematic transcript. Scene and director controls stay close to the story, while the Story menu gathers the deeper tools for memory, continuity, open plot threads, character knowledge, and evolving characterization.
 
-![Multimodal AI Assistant story workspace showing a multi-character mystery scene, atmospheric scene controls, automatic casting, voice controls, and the chat composer](docs/app-screenshot.png)
+![PersonaParlour story workspace showing a multi-character mystery scene, atmospheric scene controls, automatic casting, voice controls, and the chat composer](docs/app-screenshot.png)
 
 | Story controls | Story navigator |
 | --- | --- |
@@ -91,8 +91,8 @@ The story workspace keeps local model and voice controls around a focused, cinem
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/multimodal-ai-assistant.git
-cd multimodal-ai-assistant
+git clone https://github.com/ravipurohit1991/PersonaParlour.git
+cd PersonaParlour
 ```
 
 ### 2. Install Dependencies
@@ -115,13 +115,13 @@ Copy the example environment file and configure it:
 
 ```bash
 # Windows
-copy src\aiassistant\.env.example src\aiassistant\.env
+copy src\personaparlour\.env.example src\personaparlour\.env
 
 # Linux/Mac
-cp src/aiassistant/.env.example src/aiassistant/.env
+cp src/personaparlour/.env.example src/personaparlour/.env
 ```
 
-Edit `src/aiassistant/.env` with your preferred settings. See [Configuration Guide](#configuration-guide) below for details.
+Edit `src/personaparlour/.env` with your preferred settings. See [Configuration Guide](#configuration-guide) below for details.
 
 ### 4. Download Required Models
 
@@ -131,7 +131,7 @@ See [Model Setup](#model-setup) section for detailed instructions on downloading
 
 ```bash
 # Start the backend server
-python -m aiassistant.app
+python -m personaparlour.app
 
 # The application will be available at http://localhost:8000
 ```
@@ -169,7 +169,7 @@ Get an API key from https://ollama.com
 
 **Option 3: Custom Implementation**
 
-You can implement your own LLM provider by extending the base class in `src/aiassistant/llm/base.py`.
+You can implement your own LLM provider by extending the base class in `src/personaparlour/llm/base.py`.
 
 ### Speech-to-Text (Whisper)
 
@@ -229,7 +229,7 @@ Models are downloaded from HuggingFace on first run, or you can point to a local
 
 **ComfyUI Integration (Coming Soon)**
 
-You can implement ComfyUI endpoints by extending `src/aiassistant/imagegen/base.py`.
+You can implement ComfyUI endpoints by extending `src/personaparlour/imagegen/base.py`.
 
 ### Image Explainer (Vision-Language Model)
 
@@ -322,7 +322,7 @@ npm run dev  # Starts dev server with hot reload at http://localhost:5173
 ### Backend Development
 
 ```bash
-python -m aiassistant.app  # Runs backend server
+python -m personaparlour.app  # Runs backend server
 ```
 
 ## Perfect For

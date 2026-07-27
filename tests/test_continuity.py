@@ -2,8 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import aiassistant.continuity as continuity_module
-from aiassistant.continuity import (
+import personaparlour.continuity as continuity_module
+from personaparlour.continuity import (
     CANON_PROMPT_LIMIT,
     _parse_json_object,
     apply_revision,
@@ -19,7 +19,7 @@ from aiassistant.continuity import (
     reset_canon,
     review_reply,
 )
-from aiassistant.roleplay import build_llm_messages
+from personaparlour.roleplay import build_llm_messages
 
 
 def make_state(turns: int = 0, **overrides):

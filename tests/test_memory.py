@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
-from aiassistant.memory import (
+from personaparlour.memory import (
     build_memory_block,
     pending_count,
     render_transcript,
     should_summarize,
 )
-from aiassistant.prompts import build_memory_summary_messages
-from aiassistant.roleplay import build_llm_messages
+from personaparlour.prompts import build_memory_summary_messages
+from personaparlour.roleplay import build_llm_messages
 
 
 def make_state(turns: int = 0, **overrides):

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from aiassistant.roleplay import (
+from personaparlour.roleplay import (
     PRESENCE_BEATS,
     apply_placeholders,
     build_active_character_directive,
@@ -242,10 +242,10 @@ def test_only_configured_presence_modes_allow_unprompted_turns():
 
 def full_state(**overrides):
     """A state with every prompt feature contributing something."""
-    from aiassistant.character_study import new_trait
-    from aiassistant.continuity import new_fact
-    from aiassistant.sightlines import new_entry
-    from aiassistant.story_threads import new_story_thread
+    from personaparlour.character_study import new_trait
+    from personaparlour.continuity import new_fact
+    from personaparlour.sightlines import new_entry
+    from personaparlour.story_threads import new_story_thread
 
     trait = new_trait("Answers a question with a question", character="Mira", facet="voice")
     trait["observations"] = 2

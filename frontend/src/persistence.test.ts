@@ -39,10 +39,11 @@ describe("wipeBrowserPersistence", () => {
     expect(sessionClear).toHaveBeenCalledOnce();
     expect(cacheDelete).toHaveBeenCalledTimes(2);
     expect(deleteDatabase).toHaveBeenCalledWith("aiassistant");
+    expect(deleteDatabase).toHaveBeenCalledWith("personaparlour");
     expect(deleteDatabase).toHaveBeenCalledWith("legacy-story-db");
     expect(result).toEqual({
       errors: [],
-      indexedDatabasesDeleted: 2,
+      indexedDatabasesDeleted: 3,
       cachesDeleted: 2,
     });
   });
