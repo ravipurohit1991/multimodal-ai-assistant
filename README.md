@@ -10,17 +10,21 @@ Ever wanted an AI assistant, one that you can set a personality and interact ? O
 
 ## App Preview
 
-Here is the redesigned story workspace running with demo conversation data: local model controls, scene/director tools, live weather effects, auto-cast, reply stats, realtime voice controls, and the chat composer all in one view.
+The story workspace keeps local model and voice controls around a focused, cinematic transcript. Scene and director controls stay close to the story, while the Story menu gathers the deeper tools for memory, continuity, open plot threads, character knowledge, and evolving characterization.
 
-![Multimodal AI Assistant redesigned story workspace with demo conversation data](docs/app-screenshot.png)
+![Multimodal AI Assistant story workspace showing a multi-character mystery scene, atmospheric scene controls, automatic casting, voice controls, and the chat composer](docs/app-screenshot.png)
 
-| Scene controls | Story library |
+| Story controls | Story navigator |
 | --- | --- |
-| ![Scene controls with time, weather, location, and auto-scene options](docs/scene-controls-screenshot.png) | ![Story library modal with saved local sessions](docs/story-library-screenshot.png) |
+| ![Story menu showing Story Threads, Lorebook, Story Memory, Story Canon, Sightlines, Character Study, and Story Settings](docs/story-controls-screenshot.png) | ![Story Navigator searching dialogue across speakers with bookmarked moments](docs/story-navigator-screenshot.png) |
 
-| Cast & characters |
+| Story threads | Sightlines |
+| --- | --- |
+| ![Story Threads workspace tracking pinned mysteries, goals, secrets, and archived threads](docs/story-threads-screenshot.png) | ![Sightlines workspace showing who knows each secret and what is withheld from other characters or the user](docs/sightlines-screenshot.png) |
+
+| Character study |
 | --- |
-| ![Cast and character manager showing per-character settings and in-scene toggles](docs/cast-manager-screenshot.png) |
+| ![Character Study inside the cast manager with evidence-backed voice, manner, and relationship observations](docs/character-study-screenshot.png) |
 
 ## Key Features
 
