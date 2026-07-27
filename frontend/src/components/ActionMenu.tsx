@@ -126,14 +126,14 @@ export function ActionMenu({
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("focusin", handleFocusIn);
-    window.addEventListener("aiassistant:action-menu-open", handleOtherMenu);
+    window.addEventListener("personaparlour:action-menu-open", handleOtherMenu);
     window.addEventListener("resize", placePanel);
     window.addEventListener("scroll", placePanel, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("focusin", handleFocusIn);
-      window.removeEventListener("aiassistant:action-menu-open", handleOtherMenu);
+      window.removeEventListener("personaparlour:action-menu-open", handleOtherMenu);
       window.removeEventListener("resize", placePanel);
       window.removeEventListener("scroll", placePanel, true);
     };
@@ -195,7 +195,7 @@ export function ActionMenu({
         aria-controls={open ? panelId : undefined}
         onClick={() => {
           if (!open) {
-            window.dispatchEvent(new CustomEvent("aiassistant:action-menu-open", { detail: panelId }));
+            window.dispatchEvent(new CustomEvent("personaparlour:action-menu-open", { detail: panelId }));
           }
           setOpen((current) => !current);
         }}

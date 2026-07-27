@@ -1,4 +1,4 @@
-from aiassistant.prompts import (
+from personaparlour.prompts import (
     CORE_REPLY_CONTRACT,
     DEFAULT_IMAGE_DESCRIPTION_PROMPT,
     DEFAULT_ROLEPLAY_PROMPT,

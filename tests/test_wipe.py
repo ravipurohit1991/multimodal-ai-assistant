@@ -1,9 +1,9 @@
 import asyncio
 from dataclasses import fields
 
-from aiassistant.config import config
-from aiassistant.state import ConnState, wipe_connection_state
-from aiassistant.utils.file import wipe_user_data
+from personaparlour.config import config
+from personaparlour.state import ConnState, wipe_connection_state
+from personaparlour.utils.file import wipe_user_data
 
 
 def test_wipe_connection_state_matches_a_fresh_connection():

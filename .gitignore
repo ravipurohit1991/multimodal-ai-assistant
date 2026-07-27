@@ -185,7 +185,7 @@ dist/
 build/
 frontend/node_modules/
 frontend/package-lock.json
-src/aiassistant/frontend/
+src/personaparlour/frontend/
 src/user_data/
 src/models/
 

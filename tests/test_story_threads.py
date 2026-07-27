@@ -2,15 +2,15 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import aiassistant.story_threads as thread_module
-from aiassistant.continuity import new_fact
-from aiassistant.prompts import (
+import personaparlour.story_threads as thread_module
+from personaparlour.continuity import new_fact
+from personaparlour.prompts import (
     build_story_thread_harvest_messages,
     build_story_thread_update_messages,
 )
-from aiassistant.roleplay import build_llm_messages
-from aiassistant.state import ConnState, cancel_story_threads
-from aiassistant.story_threads import (
+from personaparlour.roleplay import build_llm_messages
+from personaparlour.state import ConnState, cancel_story_threads
+from personaparlour.story_threads import (
     THREAD_PROMPT_LIMIT,
     active_story_threads,
     apply_incremental_thread_operations,

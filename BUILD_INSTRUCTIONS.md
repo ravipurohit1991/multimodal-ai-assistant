@@ -8,7 +8,7 @@ The project uses **Hatch** as the build backend with a custom build hook that au
 
 ### Development (Editable) Install
 
-This will build the frontend and copy it to `src/aiassistant/frontend/`:
+This will build the frontend and copy it to `src/personaparlour/frontend/`:
 
 ```bash
 pip install -e .
@@ -32,7 +32,7 @@ This creates distribution files in the `dist/` directory.
 ## Directory Structure After Build
 
 ```
-src/aiassistant/
+src/personaparlour/
   frontend/          # Compiled frontend (auto-generated)
     index.html
     assets/
@@ -67,5 +67,5 @@ The FastAPI app now serves:
 ## Notes
 
 - The `dist/` directory (frontend build output) is in `.gitignore`
-- The `src/aiassistant/frontend/` directory (copied frontend) should also be in `.gitignore` for development
+- The `src/personaparlour/frontend/` directory (copied frontend) should also be in `.gitignore` for development
 - The frontend is automatically included in the wheel package via `force-include`

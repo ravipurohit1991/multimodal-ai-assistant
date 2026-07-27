@@ -126,7 +126,7 @@ export function ControlSidebar({
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: theme.colors.textPrimary, letterSpacing: 0.1 }}>
-            Multimodal AI Assistant
+            PersonaParlour
           </div>
           <div style={{ fontSize: 10.5, color: theme.colors.textTertiary, marginTop: 1 }}>
             Local · private · yours

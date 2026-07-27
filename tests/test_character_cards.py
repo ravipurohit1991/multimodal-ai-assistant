@@ -4,8 +4,8 @@ import json
 import random
 from types import SimpleNamespace
 
-import aiassistant.character_cards as cards_module
-from aiassistant.character_cards import (
+import personaparlour.character_cards as cards_module
+from personaparlour.character_cards import (
     AGES,
     GUIDED_DIMENSIONS,
     MAX_DESCRIPTION_CHARS,
@@ -16,7 +16,7 @@ from aiassistant.character_cards import (
     roll_seed,
     unique_name,
 )
-from aiassistant.prompts import build_character_card_messages
+from personaparlour.prompts import build_character_card_messages
 
 GOOD_CARD = {
     "name": "Iker Egiguren",

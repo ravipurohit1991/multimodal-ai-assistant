@@ -2,8 +2,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import aiassistant.character_study as study_module
-from aiassistant.character_study import (
+import personaparlour.character_study as study_module
+from personaparlour.character_study import (
     FADE_AFTER_TURNS,
     FIRM_AT,
     MAX_TRAITS_PER_CHARACTER,
@@ -35,12 +35,12 @@ from aiassistant.character_study import (
     update_trait,
     watch_reply,
 )
-from aiassistant.prompts import (
+from personaparlour.prompts import (
     build_study_harvest_messages,
     build_study_reflect_messages,
     build_study_watch_messages,
 )
-from aiassistant.roleplay import build_llm_messages
+from personaparlour.roleplay import build_llm_messages
 
 PASSAGE = (
     'Mira turns the glass a quarter turn on the table, then another. "Would you '

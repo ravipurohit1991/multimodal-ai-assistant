@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Renamed the application and project from its former assistant-oriented name to
+  **PersonaParlour**, including the Python package (`personaparlour`), frontend
+  metadata, development commands, documentation, and repository links. Existing
+  browser settings and exported sessions remain compatible.
+
 ### Fixed
 - **The reply prompt had grown incoherent.** Each feature had been added with its own
   system block and its own placement, and nobody had looked at the result end to end.
@@ -49,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Invent a character** — a whole card written by the model, from a guiding line or
-  from nothing. `src/aiassistant/character_cards.py` returns name, description,
+  from nothing. `src/personaparlour/character_cards.py` returns name, description,
   personality, and first message; the cast manager grows a box for the optional
   guidance and a *Surprise me* button when it is empty.
   The blank case is the one with a real problem behind it. A model asked for "a random
@@ -82,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and quietly sands the cast down to its own narrator voice: twenty turns in, the terse
   ex-soldier and the arch academic produce the same three-clause sentences, and nothing
   flags it because nothing was contradicted. The cast has simply merged.
-  A new module (`src/aiassistant/character_study.py`) keeps, per character, a short
+  A new module (`src/personaparlour/character_study.py`) keeps, per character, a short
   ledger of specific evidence-backed observations across six facets — **voice** (how
   they speak), **line** (a sentence they actually said, kept verbatim as an anchor),
   **manner** (what they do), **bond** (where they stand with one other participant),
@@ -126,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sightlines** — the story now knows who knows what. Story Memory, the Continuity
   Guard, and Story Threads are all global: each assembles one block and sends it
   unchanged to whoever is speaking, which quietly makes every cast member omniscient.
-  A new ledger (`src/aiassistant/sightlines.py`) gives each piece of knowledge an
+  A new ledger (`src/personaparlour/sightlines.py`) gives each piece of knowledge an
   *audience*, and `build_llm_messages` is now speaker-aware. Someone in the audience
   is told the entry in full, plus who else shares it and who does not, so they can act
   on a secret or guard it. Anyone outside it is shown a **spoiler-free `topic`** and
@@ -182,7 +188,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bookmarks persist in browser history and saved sessions, remain visible in the
   navigator, and are marked in Markdown exports.
 - **Continuity guard** — the story keeps a canon, and every reply is held to it. A
-  ledger of durable facts (`src/aiassistant/continuity.py`) — eye colour, who holds the
+  ledger of durable facts (`src/personaparlour/continuity.py`) — eye colour, who holds the
   key, who is dead, what was promised — is injected into every turn so contradictions
   mostly never get written; each new reply is then read back against it in the
   background, and a hard conflict is reported against the message that caused it, while
@@ -205,7 +211,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marked "spoke first" in the transcript, the beat varies rather than repeating itself, and
   the setting travels with a saved story.
 - **Story memory** — a rolling, model-written record of everything that scrolls out of the
-  context window. Older turns are folded into a "story so far" block (`src/aiassistant/memory.py`)
+  context window. Older turns are folded into a "story so far" block (`src/personaparlour/memory.py`)
   and replaced in the prompt, while recent exchanges still go out verbatim, so a long
   roleplay keeps its continuity without resending the whole transcript. Runs itself in the
   background after a reply, or on demand; the record is readable and editable from a new

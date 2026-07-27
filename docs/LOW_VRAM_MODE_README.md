@@ -1,7 +1,7 @@
 # Low VRAM Mode & Model Status Display - Implementation Summary
 
 ## Overview
-This implementation adds two features to the multimodal AI assistant:
+This implementation adds two features to the PersonaParlour:
 1. **Low VRAM Mode**: Automatically unloads models after use to conserve GPU memory for other tasks (image generation and image description)
 2. **Model Status Display**: Real-time monitoring of all models with device info and memory usage
 
@@ -10,7 +10,7 @@ This implementation adds two features to the multimodal AI assistant:
 ### 1. Low VRAM Mode Configuration
 
 #### Backend Changes
-- **Config Flag** ([config.py](src/aiassistant/config.py)):
+- **Config Flag** ([config.py](src/personaparlour/config.py)):
   - Added `LOW_VRAM_MODE` environment variable (default: `false`)
   - Set to `true` for systems with limited VRAM (< 8GB recommended)
 

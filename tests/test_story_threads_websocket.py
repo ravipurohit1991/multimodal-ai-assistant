@@ -31,7 +31,7 @@ class ScriptedWebSocket:
 def _load_websocket_module_without_real_engines(monkeypatch):
     """Import orchestration without initializing Whisper/Piper model assets."""
 
-    fake_manager_module = ModuleType("aiassistant.engine_manager")
+    fake_manager_module = ModuleType("personaparlour.engine_manager")
     fake_manager_module.engine_manager = SimpleNamespace(
         stt_engine=object(),
         tts_engine=object(),
@@ -40,11 +40,11 @@ def _load_websocket_module_without_real_engines(monkeypatch):
     )
     monkeypatch.setitem(
         sys.modules,
-        "aiassistant.engine_manager",
+        "personaparlour.engine_manager",
         fake_manager_module,
     )
-    sys.modules.pop("aiassistant.websocket", None)
-    return importlib.import_module("aiassistant.websocket")
+    sys.modules.pop("personaparlour.websocket", None)
+    return importlib.import_module("personaparlour.websocket")
 
 
 def test_history_replacement_preserves_only_pinned_threads_and_clear_resets_all(
@@ -98,7 +98,7 @@ def test_history_replacement_preserves_only_pinned_threads_and_clear_resets_all(
     try:
         asyncio.run(websocket_module.ws_endpoint(socket))
     finally:
-        sys.modules.pop("aiassistant.websocket", None)
+        sys.modules.pop("personaparlour.websocket", None)
 
     snapshots = [
         frame for frame in socket.sent if frame.get("type") == "story_threads_updated"

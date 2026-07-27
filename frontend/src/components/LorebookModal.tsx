@@ -78,7 +78,7 @@ export function LorebookModal({
       alert("There are no entries to export yet.");
       return;
     }
-    downloadJson("lorebook.json", { type: "aiassistant_lorebook", version: 1, entries });
+    downloadJson("lorebook.json", { type: "personaparlour_lorebook", version: 1, entries });
   };
 
   const labelStyle: React.CSSProperties = {

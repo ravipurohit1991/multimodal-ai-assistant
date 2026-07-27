@@ -67,8 +67,22 @@ function serializeStoryThreads(threads: StoryThread[]) {
 }
 
 // Local storage persistence for conversation history
-const HISTORY_STORAGE_KEY = "aiassistant_conversation_history";
-const SETTINGS_STORAGE_KEY = "aiassistant_settings";
+const HISTORY_STORAGE_KEY = "personaparlour_conversation_history";
+const SETTINGS_STORAGE_KEY = "personaparlour_settings";
+const LEGACY_HISTORY_STORAGE_KEY = "aiassistant_conversation_history";
+const LEGACY_SETTINGS_STORAGE_KEY = "aiassistant_settings";
+
+function loadStoredValue(currentKey: string, legacyKey: string): string | null {
+  const current = localStorage.getItem(currentKey);
+  if (current !== null) return current;
+
+  const legacy = localStorage.getItem(legacyKey);
+  if (legacy !== null) {
+    localStorage.setItem(currentKey, legacy);
+    localStorage.removeItem(legacyKey);
+  }
+  return legacy;
+}
 
 function saveHistoryToStorage(history: Message[]) {
   try {
@@ -80,7 +94,7 @@ function saveHistoryToStorage(history: Message[]) {
 
 function loadHistoryFromStorage(): Message[] {
   try {
-    const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
+    const stored = loadStoredValue(HISTORY_STORAGE_KEY, LEGACY_HISTORY_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
       // Convert timestamp strings back to Date objects
@@ -97,7 +111,7 @@ function loadHistoryFromStorage(): Message[] {
 
 function loadSettings(): Record<string, any> {
   try {
-    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    const stored = loadStoredValue(SETTINGS_STORAGE_KEY, LEGACY_SETTINGS_STORAGE_KEY);
     if (stored) return JSON.parse(stored);
   } catch (e) {
     console.error("Failed to load settings:", e);
@@ -2013,7 +2027,7 @@ export default function App() {
 
   // ----- Session save / load (full snapshot, to file or the story library) -----
   const buildSessionSnapshot = () => ({
-    type: "aiassistant_session",
+    type: "personaparlour_session",
     version: 1,
     savedAt: new Date().toISOString(),
     conversationHistory,
@@ -2256,7 +2270,8 @@ export default function App() {
   const handleLoadSession = async (file: File) => {
     try {
       const data = await readJsonFile(file);
-      if (data && data.type && data.type !== "aiassistant_session") {
+      const supportedSessionTypes = new Set(["personaparlour_session", "aiassistant_session"]);
+      if (data && data.type && !supportedSessionTypes.has(data.type)) {
         if (!window.confirm("This file doesn't look like a saved session. Load it anyway?")) return;
       }
       if (conversationHistory.length > 0 &&

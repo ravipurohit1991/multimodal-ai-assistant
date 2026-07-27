@@ -6,7 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 from fastapi import WebSocketDisconnect
 
-from aiassistant.sightlines import USER_TOKEN
+from personaparlour.sightlines import USER_TOKEN
 
 SECRET = "Mira poisoned the wine at the Duke's table"
 TOPIC = "what happened to the wine"
@@ -36,16 +36,16 @@ class ScriptedWebSocket:
 def _load_websocket_module_without_real_engines(monkeypatch):
     """Import orchestration without initializing Whisper/Piper model assets."""
 
-    fake_manager_module = ModuleType("aiassistant.engine_manager")
+    fake_manager_module = ModuleType("personaparlour.engine_manager")
     fake_manager_module.engine_manager = SimpleNamespace(
         stt_engine=object(),
         tts_engine=object(),
         image_explainer=None,
         image_generator=None,
     )
-    monkeypatch.setitem(sys.modules, "aiassistant.engine_manager", fake_manager_module)
-    sys.modules.pop("aiassistant.websocket", None)
-    return importlib.import_module("aiassistant.websocket")
+    monkeypatch.setitem(sys.modules, "personaparlour.engine_manager", fake_manager_module)
+    sys.modules.pop("personaparlour.websocket", None)
+    return importlib.import_module("personaparlour.websocket")
 
 
 def run_socket(monkeypatch, frames: list[dict]) -> ScriptedWebSocket:
@@ -54,7 +54,7 @@ def run_socket(monkeypatch, frames: list[dict]) -> ScriptedWebSocket:
     try:
         asyncio.run(websocket_module.ws_endpoint(socket))
     finally:
-        sys.modules.pop("aiassistant.websocket", None)
+        sys.modules.pop("personaparlour.websocket", None)
     return socket
 
 

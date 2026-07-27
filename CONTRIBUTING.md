@@ -1,4 +1,4 @@
-# Contributing to Multimodal AI Assistant
+# Contributing to PersonaParlour
 
 First off, thank you for considering contributing to this project! 🎉
 
@@ -67,8 +67,8 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 1. **Fork and clone the repository**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/multimodal-ai-assistant.git
-cd multimodal-ai-assistant
+git clone https://github.com/YOUR_USERNAME/PersonaParlour.git
+cd PersonaParlour
 ```
 
 2. **Create a virtual environment**
@@ -101,7 +101,7 @@ cd ..
 
 ```bash
 # Copy example config
-cp src/aiassistant/.env.example src/aiassistant/.env
+cp src/personaparlour/.env.example src/personaparlour/.env
 
 # Edit .env with your settings
 ```
@@ -110,7 +110,7 @@ cp src/aiassistant/.env.example src/aiassistant/.env
 
 ```bash
 # Terminal 1: Backend
-python -m aiassistant.app
+python -m personaparlour.app
 
 # Terminal 2: Frontend (optional, for development)
 cd frontend
@@ -124,7 +124,7 @@ npm run dev
 The backend is a FastAPI application with the following structure:
 
 ```
-src/aiassistant/
+src/personaparlour/
 ├── app.py              # FastAPI application entry point
 ├── config.py           # Configuration management
 ├── routes.py           # HTTP API endpoints
@@ -176,7 +176,7 @@ npm run build  # Outputs to ../dist/
 
 ### Adding a New LLM Provider
 
-1. Create a new file in `src/aiassistant/llm/` (e.g., `anthropic.py`)
+1. Create a new file in `src/personaparlour/llm/` (e.g., `anthropic.py`)
 2. Inherit from `BaseLLM` in `llm/base.py`
 3. Implement required methods:
    - `load()` - Initialize the model
@@ -187,7 +187,7 @@ npm run build  # Outputs to ../dist/
 Example:
 
 ```python
-from aiassistant.llm.base import BaseLLM
+from personaparlour.llm.base import BaseLLM
 
 class AnthropicLLM(BaseLLM):
     def __init__(self, config):
@@ -209,7 +209,7 @@ class AnthropicLLM(BaseLLM):
 
 ### Adding a New TTS Engine
 
-1. Create a new file in `src/aiassistant/tts/` (e.g., `elevenlabs.py`)
+1. Create a new file in `src/personaparlour/tts/` (e.g., `elevenlabs.py`)
 2. Inherit from `BaseTTS` in `tts/base.py`
 3. Implement required methods:
    - `load()` - Initialize the engine
@@ -220,7 +220,7 @@ class AnthropicLLM(BaseLLM):
 
 ### Adding a New Image Generation Backend
 
-1. Create a new file in `src/aiassistant/imagegen/` (e.g., `comfyui.py`)
+1. Create a new file in `src/personaparlour/imagegen/` (e.g., `comfyui.py`)
 2. Inherit from `BaseImageGenerator` in `imagegen/base.py`
 3. Implement required methods:
    - `load()` - Initialize the generator
@@ -231,7 +231,7 @@ class AnthropicLLM(BaseLLM):
 Example for ComfyUI integration:
 
 ```python
-from aiassistant.imagegen.base import BaseImageGenerator
+from personaparlour.imagegen.base import BaseImageGenerator
 import requests
 
 class ComfyUIGenerator(BaseImageGenerator):
@@ -324,7 +324,7 @@ Add ComfyUI integration for image generation
 pytest
 
 # Run with coverage
-pytest --cov=aiassistant
+pytest --cov=personaparlour
 
 # Run specific test file
 pytest tests/test_llm.py

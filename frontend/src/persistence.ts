@@ -94,7 +94,9 @@ export async function wipeBrowserPersistence(): Promise<BrowserWipeResult> {
 
   try {
     if (typeof indexedDB !== "undefined") {
-      const databaseNames = new Set<string>(["aiassistant"]);
+      // Keep the former database name so a full wipe also clears data left by
+      // releases from before the PersonaParlour rename.
+      const databaseNames = new Set<string>(["personaparlour", "aiassistant"]);
       if (typeof indexedDB.databases === "function") {
         const databases = await indexedDB.databases();
         for (const database of databases) {
