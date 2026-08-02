@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client
 from personaparlour.prompts import build_memory_summary_messages
 from personaparlour.utils import logger
 
@@ -36,6 +36,11 @@ MAX_TRIGGER = 100
 # Hard ceiling on a generated summary, so a runaway model can never grow the
 # memory block until it crowds out the conversation it is supposed to support.
 MAX_SUMMARY_CHARS = 6000
+
+# The contract asks for at most about 400 words. This is the server-side ceiling
+# behind that ask: the char guard below only stops reading, whereas this stops
+# the model generating, so a runaway pass costs seconds instead of minutes.
+SUMMARY_TOKEN_CEILING = 1600
 
 # Upkeep is background work with no user waiting on it, but it must not stall
 # forever either: LLM streams are opened without a timeout, so a wedged server
@@ -78,7 +83,7 @@ def pending_count(state) -> int:
 
 def should_summarize(state) -> bool:
     """Whether enough has happened to justify an automatic memory pass."""
-    if not getattr(state, "memory_enabled", True):
+    if not getattr(state, "memory_enabled", False):
         return False
     return pending_count(state) >= trigger_after(state)
 
@@ -89,7 +94,7 @@ def build_memory_block(state) -> str:
     Returns "" when memory is off or nothing has been summarized yet, so a short
     conversation costs exactly what it did before this feature existed.
     """
-    if not getattr(state, "memory_enabled", True):
+    if not getattr(state, "memory_enabled", False):
         return ""
     summary = (getattr(state, "memory_summary", "") or "").strip()
     if not summary:
@@ -170,8 +175,10 @@ async def summarize_story(state, *, force: bool = False) -> tuple[str, int] | No
     )
 
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages, model=state.llm_model, options={"num_predict": SUMMARY_TOKEN_CEILING}
+    ):
         raw += delta
         if len(raw) > MAX_SUMMARY_CHARS * 2:
             break

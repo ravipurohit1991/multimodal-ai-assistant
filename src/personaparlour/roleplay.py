@@ -13,11 +13,13 @@ from __future__ import annotations
 import re
 
 from personaparlour.character_study import build_study_block
+from personaparlour.config import config
 from personaparlour.continuity import build_canon_block
 from personaparlour.memory import build_memory_block, memory_cursor
 from personaparlour.prompts import build_final_reply_reminder
 from personaparlour.sightlines import build_sightlines_block
 from personaparlour.story_threads import build_story_threads_block
+from personaparlour.utils import logger
 
 # {{char}} / {{user}} macros (SillyTavern-style). Matched case-insensitively and
 # tolerant of inner whitespace, e.g. "{{ Char }}".
@@ -51,16 +53,14 @@ def build_active_character_directive(character: str) -> str:
     name = re.sub(r"[\r\n\t]+", " ", str(character or "")).strip()[:80]
     if not name:
         return ""
+    # Said once. The previous wording asserted the override three separate times
+    # — as a heading, as a sentence, and again as a closing clause — which is a
+    # hundred-odd tokens on every single turn to make one unambiguous point that
+    # was already unambiguous the first time.
     return (
         "[Active character for this reply]\n"
-        "Identity override: this assignment has priority over every character name "
-        "or identity elsewhere in the context.\n"
-        f"Your name is {name}. For this reply you are {name}, not any other "
-        f"character. Reply only as {name}, using {name}'s character card, "
-        "personality, voice, knowledge, and point of view. This identity assignment "
-        "replaces every older or conflicting identity instruction anywhere in the "
-        f"context. Never identify yourself as another character; if asked your name, "
-        f"the answer is {name}."
+        f"Your name is {name}. Reply only as {name}, from {name}'s card, voice, "
+        f"knowledge, and point of view. If asked your name, the answer is {name}."
     )
 
 
@@ -86,6 +86,81 @@ _PACING_DIRECTIVES = {
     "slow": "Pacing: slow-burn — linger in the present moment, build tension gradually, do not rush the plot.",
     "advance": "Pacing: keep the story moving — introduce a fresh development, complication, or turn this reply.",
 }
+
+
+# Ceilings, not targets. The prose directives above decide how long a reply
+# should be; these only stop a model that has forgotten to finish, which is where
+# the worst of the token waste lives — a "novella" dial with no ceiling will
+# happily generate until the context window is full. Set well above what each
+# dial actually asks for, so a legitimate reply is never cut mid-sentence.
+_LENGTH_TOKEN_CEILINGS = {
+    "brief": 400,
+    "normal": 800,
+    "detailed": 1500,
+    "novella": 3000,
+}
+
+
+def reply_token_ceiling(state) -> int:
+    """The ``num_predict`` for one in-character reply."""
+    override = int(getattr(config, "llm_max_tokens", 0) or 0)
+    if override > 0:
+        return override
+    length = getattr(state, "response_length", "normal") or "normal"
+    return _LENGTH_TOKEN_CEILINGS.get(length, _LENGTH_TOKEN_CEILINGS["normal"])
+
+
+# The most turns that may be sent verbatim, whatever else is or is not switched
+# on. Comfortably above the Story Memory window (12 recent + a 20-turn backlog),
+# so on default settings this never fires and memory keeps doing the job properly
+# — it is a backstop for the configurations where memory cannot.
+DEFAULT_HISTORY_LIMIT = 40
+MIN_HISTORY_LIMIT = 4
+
+
+def history_limit(state) -> int:
+    """How many recent turns may reach the model. 0 disables the cap."""
+    value = int(getattr(state, "max_history_messages", DEFAULT_HISTORY_LIMIT) or 0)
+    if value <= 0:
+        return 0
+    return max(MIN_HISTORY_LIMIT, value)
+
+
+def build_stop_sequences(state, speaker: str = "") -> list[str]:
+    """Stop the model before it writes somebody else's turn.
+
+    The app already strips a speaker label off the front of a reply, but nothing
+    stopped a model that finished its own turn and carried straight on into
+    "Alex:" and a line of the user's dialogue. Those tokens are paid for, thrown
+    away by the reader, and — because they are stored in history — teach the next
+    turn the same habit.
+
+    Only a label at the start of a line counts, so the speaker's own name is safe
+    to include for everyone *except* whoever is talking: a leading label on the
+    reply itself is not preceded by a newline, and the prefix filter handles it.
+
+    Verified honoured by a local Ollama model. Models proxied through ollama.com
+    ignore ``stop`` — they were observed running to the ``num_predict`` ceiling
+    and writing the user's turn anyway — so on a cloud model the token ceiling is
+    the only guard, and the speaker-prefix filter remains the thing that keeps a
+    stray label out of the transcript.
+    """
+    names = [getattr(state, "user_name", "") or "", *(getattr(state, "cast", []) or [])]
+    active = _clean_name(speaker or getattr(state, "char_name", "") or "")
+    stops: list[str] = []
+    for name in names:
+        cleaned = _clean_name(name)
+        if not cleaned or cleaned.casefold() == active.casefold():
+            continue
+        stop = f"\n{cleaned}:"
+        if stop not in stops:
+            stops.append(stop)
+    return stops[:8]
+
+
+def _clean_name(value: object) -> str:
+    """A display name reduced to something usable as a stop sequence."""
+    return re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()[:60]
 
 
 def build_style_directive(state, char: str = "", user: str = "") -> str:
@@ -116,9 +191,7 @@ def build_style_directive(state, char: str = "", user: str = "") -> str:
         return ""
 
     body = "\n".join(f"- {apply_placeholders(line, char, user)}" for line in lines)
-    return (
-        "[Scene direction — shape your next reply accordingly.]\n" + body
-    )
+    return "[Scene direction — shape your next reply accordingly.]\n" + body
 
 
 # ----- Idle presence (the character speaks first) -------------------------
@@ -355,15 +428,35 @@ def _entry_keys(entry: dict) -> list[str]:
     return [k.strip() for k in (keys or []) if isinstance(k, str) and k.strip()]
 
 
+def _key_matches(key: str, haystack: str, case_sensitive: bool) -> bool:
+    """Whether a lorebook keyword occurs in the text as a word of its own.
+
+    This used to be a bare substring test, which meant a key of "art" fired on
+    "start", "party", and "particular" — injecting an unrelated block of world
+    knowledge into the standing context. That is the same bug twice over: tokens
+    spent on lore nobody asked for, and a reply steered by it.
+
+    The boundary is only applied at ends that are actually word characters, so
+    multi-word keys and keys with punctuation ("Blackwood Manor", "K-7") still
+    match the way an author would expect.
+    """
+    if not key:
+        return False
+    left = r"(?<!\w)" if key[0].isalnum() or key[0] == "_" else ""
+    right = r"(?!\w)" if key[-1].isalnum() or key[-1] == "_" else ""
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return re.search(left + re.escape(key) + right, haystack, flags) is not None
+
+
 def scan_lorebook(
     entries: list[dict], recent_messages: list[dict], scan_depth: int = 4
 ) -> list[dict]:
     """Return lorebook entries that should be active for the upcoming turn.
 
     An entry activates when it is marked ``constant`` (always on) or when any of
-    its keywords appears in the most recent ``scan_depth`` user/assistant
-    messages. The original ordering of ``entries`` is preserved so that authors
-    can control priority.
+    its keywords appears as a whole word in the most recent ``scan_depth``
+    user/assistant messages. The original ordering of ``entries`` is preserved so
+    that authors can control priority.
     """
     if not entries:
         return []
@@ -371,7 +464,6 @@ def scan_lorebook(
     convo = [m for m in recent_messages if m.get("role") in ("user", "assistant")]
     window = convo[-scan_depth:] if scan_depth and scan_depth > 0 else convo
     haystack = "\n".join(str(m.get("content", "")) for m in window)
-    haystack_lower = haystack.lower()
 
     active: list[dict] = []
     for entry in entries:
@@ -383,10 +475,8 @@ def scan_lorebook(
             active.append(entry)
             continue
         case_sensitive = bool(entry.get("case_sensitive", False))
-        target = haystack if case_sensitive else haystack_lower
         for key in _entry_keys(entry):
-            needle = key if case_sensitive else key.lower()
-            if needle and needle in target:
+            if _key_matches(key, haystack, case_sensitive):
                 active.append(entry)
                 break
     return active
@@ -407,6 +497,30 @@ def render_lorebook_block(active_entries: list[dict]) -> str:
         "[Relevant world & character knowledge — treat the following as "
         "established facts.]\n" + "\n".join(parts)
     )
+
+
+def trimmed_side_task_history(state) -> list[dict]:
+    """The conversation as a side task should see it: system prompt, recent turns.
+
+    "Write my next message for me" and "suggest three replies" both used to send
+    ``state.messages`` raw — every turn of the story, with no memory substitution
+    and no window at all. On a long story that made either button the single most
+    expensive request in the app, for a task that only needs the last few
+    exchanges plus who everyone is. This applies the same two trims a reply gets:
+    the story-so-far record stands in for what it covers, and the rest is capped.
+    """
+    system_msgs = [dict(m) for m in state.messages if m.get("role") == "system"]
+    history = [dict(m) for m in state.messages if m.get("role") != "system"]
+
+    memory_block = build_memory_block(state)
+    if memory_block:
+        history = history[memory_cursor(state, len(history)) :]
+        system_msgs.append({"role": "system", "content": memory_block})
+
+    limit = history_limit(state)
+    if limit and len(history) > limit:
+        history = history[-limit:]
+    return system_msgs + history
 
 
 def build_llm_messages(
@@ -464,6 +578,20 @@ def build_llm_messages(
     memory_block = build_memory_block(state)
     if memory_block and state.use_context:
         history = history[memory_cursor(state, len(history)) :]
+
+    # And a floor under it, for the cases the memory cursor cannot cover: memory
+    # switched off, or simply not summarized yet — the first fold only happens
+    # once thirty-odd turns have piled up. Until then the trim above does nothing
+    # and the whole transcript was going out every turn, growing without limit.
+    # This drops the oldest turns instead, which is the same bargain the memory
+    # cursor makes, minus the summary.
+    limit = history_limit(state)
+    if limit and len(history) > limit:
+        logger.debug(
+            f"Prompt history capped at {limit} of {len(history)} turns "
+            f"({'memory has not folded them yet' if state.memory_enabled else 'story memory is off'})"
+        )
+        history = history[-limit:]
 
     # Lorebook is scanned against the real recent history regardless of whether
     # full context is enabled, so keyword triggers still fire in single-turn mode.
@@ -528,8 +656,7 @@ def build_llm_messages(
     # refuse to render and none render well.
     note = (getattr(state, "author_note", "") or "").strip()
     note_block = (
-        f"[Author's Note — guidance for the next response]\n"
-        f"{apply_placeholders(note, char, user)}"
+        f"[Author's Note — guidance for the next response]\n{apply_placeholders(note, char, user)}"
         if note
         else ""
     )
@@ -577,9 +704,7 @@ def build_llm_messages(
     # The steering goes immediately before the user's latest message, never after
     # it. One turn back is close enough to be obeyed, and it leaves the thing the
     # model is supposed to be answering as the most recent thing it has read.
-    steering_msgs = (
-        [{"role": "system", "content": "\n\n".join(steering)}] if steering else []
-    )
+    steering_msgs = [{"role": "system", "content": "\n\n".join(steering)}] if steering else []
     # Only when the user has just spoken is there anything to keep last. A group
     # scene handing off to the next speaker, or a character breaking a silence of
     # their own, ends on an assistant turn — and there the steering *is* the most

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.prompts import build_animation_planner_messages
 
 # Matches a single mood/emotion tag, e.g. "[mood: flirty]" or "[emotion: sad]"
@@ -414,8 +414,13 @@ async def generate_animation_directive_from_reply(
     messages = build_animation_planner_messages(clean_reply, character_name, user_name)
 
     raw = ""
-    temp_client = OllamaClient(host=llm_host, default_model=llm_model)
-    async for delta in temp_client.stream_chat(messages, model=llm_model):
+    client = get_chat_client(llm_host, llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=llm_model,
+        think=False,
+        options=structured_pass_options(2400),
+    ):
         raw += delta
         if len(raw) > 2400:
             break

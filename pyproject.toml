@@ -1,6 +1,6 @@
 [project]
 name = "personaparlour"
-version = "0.2.0"
+version = "0.3.0"
 description = "A private, local-first character roleplay and storytelling workspace with voice, vision, and image generation"
 authors = [
     {name = "Ravi PURUSHOTTAM", email = "ravi.purushottamrajpurohit@gmail.com"}
@@ -38,7 +38,12 @@ dependencies = [
     "ollama",
 
     # Text-to-Speech (TTS)
-    # Piper TTS, default TTS engine
+    # NeuTTS, default TTS engine: voice cloning plus emotional delivery.
+    # The plain torch backbone is roughly 12x slower than real time on CPU; for a
+    # CPU-only machine also install llama-cpp-python and point NEUTTS_BACKBONE at
+    # a "*-gguf" repo, which is the backend NeuTTS streams from.
+    "neutts",
+    # Piper TTS, lightweight fallback engine
     "piper-tts",
     "onnxruntime",
     # Chatterbox TTS (Optional - install with: pip install chatterbox-tts)
@@ -81,9 +86,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    # Required by the asyncio_mode = "auto" setting below; without it every
+    # async test silently fails on a coroutine that was never awaited.
+    "pytest-asyncio",
     "black",
     "ruff",
     "hatch",
+]
+# GGUF backbones for NeuTTS — the practical way to run it on a CPU-only box.
+gguf = [
+    "llama-cpp-python",
 ]
 
 [project.urls]

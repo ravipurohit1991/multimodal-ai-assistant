@@ -433,8 +433,9 @@ export default function App() {
   const [llmModel, setLlmModel] = useState<string>(savedSettings.llmModel || "");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [availableVoices, setAvailableVoices] = useState<VoiceInfo[]>([]);
-  const [currentVoice, setCurrentVoice] = useState(savedSettings.currentVoice || "en_GB-jenny_dioco-medium");
-  const [ttsEngine, setTtsEngine] = useState<TtsEngine>((savedSettings.ttsEngine as TtsEngine) || "piper");
+  const [voiceEmotions, setVoiceEmotions] = useState<string[]>([]);
+  const [currentVoice, setCurrentVoice] = useState(savedSettings.currentVoice || "");
+  const [ttsEngine, setTtsEngine] = useState<TtsEngine>((savedSettings.ttsEngine as TtsEngine) || "neutts");
   const [outputMode, setOutputMode] = useState<OutputMode>((savedSettings.outputMode as OutputMode) || "text");
 
   // Image Explainer settings
@@ -536,10 +537,17 @@ export default function App() {
           const swipeTarget = swipeRegenRef.current;
           const mood = pendingMoodRef.current;
           const animation = animationForHistory(pendingAnimationRef.current);
-          // Generation stats reported by the backend for this reply.
+          // Generation stats reported by the backend for this reply. The exact
+          // accounting from the model server is preferred when it arrives; the
+          // chunk-count estimate is the fallback for a server that sent none.
           const stats = {
             ...(msg.elapsed_ms ? { genMs: msg.elapsed_ms } : {}),
             ...(msg.approx_tokens ? { genTokens: msg.approx_tokens } : {}),
+            ...(msg.usage ? {
+              genTokens: msg.usage.completion_tokens || msg.approx_tokens,
+              promptTokens: msg.usage.prompt_tokens,
+              contextLimit: msg.usage.context_limit,
+            } : {}),
           };
           // Which cast member authored this reply (group scenes) — captured at
           // generation start so it lands on the right message.
@@ -2483,6 +2491,9 @@ export default function App() {
       const data = await response.json();
       setAvailableVoices(data.voices);
       setCurrentVoice(data.current);
+      // Only NeuTTS reports emotions today; the others send nothing and the
+      // expressive note stays hidden rather than promising delivery they cannot give.
+      setVoiceEmotions(data.supports_emotion && Array.isArray(data.emotions) ? data.emotions : []);
     } catch (error) {
       console.error("Failed to fetch voices:", error);
     }
@@ -2933,6 +2944,7 @@ export default function App() {
           outputMode={outputMode}
           currentVoice={currentVoice}
           availableVoices={availableVoices}
+          voiceEmotions={voiceEmotions}
           useContext={useContext}
           includeImageGen={includeImageGen}
           playingMessageIndex={playingMessageIndex}

@@ -285,6 +285,19 @@ input[type='range'] {
 .action-menu-field .input {
   width: 100%;
 }
+.action-menu-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.action-menu-note code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--field);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
 
 /* Buttons */
 .btn {

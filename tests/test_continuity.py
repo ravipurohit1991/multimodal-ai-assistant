@@ -283,15 +283,16 @@ class FakeClient:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def stream_chat(self, messages, model=None, think=None):
+    async def stream_chat(self, messages, model=None, think=None, options=None, on_usage=None):
         assert think is False, "side-tasks must not pay for a reasoning model's deliberation"
+        assert (options or {}).get("num_predict"), "a side-task must cap what it generates"
         for chunk in (FakeClient.answer[i : i + 7] for i in range(0, len(FakeClient.answer), 7)):
             yield chunk
 
 
 def run_review(monkeypatch, state, answer, reply="Her green eyes narrowed."):
     FakeClient.answer = answer
-    monkeypatch.setattr(continuity_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(continuity_module, "get_chat_client", lambda *a, **k: FakeClient())
     return asyncio.run(review_reply(state, reply))
 
 

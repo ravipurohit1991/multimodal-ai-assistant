@@ -82,6 +82,34 @@ class ConfigManager:
         if self.output_mode not in {"text", "voice"}:
             self.output_mode = "text"
 
+        # Context window. Ollama applies its own server default (4096 unless
+        # OLLAMA_CONTEXT_LENGTH says otherwise) when a request names no num_ctx,
+        # and silently discards whatever does not fit — which, with the standing
+        # system block sent first, is the conversation. A mid-story turn in this
+        # app runs to roughly six thousand tokens, so the default here is set
+        # above that rather than at the server's figure.
+        self.llm_num_ctx = max(1024, int(os.getenv("LLM_NUM_CTX", "16384")))
+        # Hard ceiling on one reply. 0 means "let the Director's length dial
+        # decide", which is the sane default; a number here overrides the dial
+        # for users on hardware where a long generation is genuinely painful.
+        self.llm_max_tokens = max(0, int(os.getenv("LLM_MAX_TOKENS", "0")))
+        # Sampling. Left at Ollama's own defaults unless the user says otherwise,
+        # so this change does not quietly alter how anyone's model already reads.
+        self.llm_temperature = self._optional_float("LLM_TEMPERATURE")
+        self.llm_top_p = self._optional_float("LLM_TOP_P")
+        self.llm_repeat_penalty = self._optional_float("LLM_REPEAT_PENALTY")
+
+    @staticmethod
+    def _optional_float(name: str) -> float | None:
+        """Read a tuning knob that is only sent when the user actually set it."""
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
     def _init_whisper_config(self):
         """Initialize Whisper STT configuration"""
         self.whisper_model = os.getenv("WHISPER_MODEL", "medium.en")
@@ -90,7 +118,7 @@ class ConfigManager:
 
     def _init_tts_config(self):
         """Initialize TTS engine configurations"""
-        self.tts_engine = os.getenv("TTS_ENGINE", "chatterbox").lower()
+        self.tts_engine = os.getenv("TTS_ENGINE", "neutts").lower()
 
         # Piper TTS
         # voices are in two directory up from this config file
@@ -118,6 +146,43 @@ class ConfigManager:
         self.chatterbox_exaggeration = float(os.getenv("CHATTERBOX_EXAGGERATION", "0.5"))
         # CFG weight (0.0-1.0, default 0.5): lower = slower, more deliberate pacing
         self.chatterbox_cfg_weight = float(os.getenv("CHATTERBOX_CFG_WEIGHT", "0.5"))
+
+        # ---------- NeuTTS Configuration ----------
+        # Backbone. "auto" picks the neutts-2e family either way — the only one
+        # that takes an emotion token, which is what lets a line be delivered
+        # angry or wistful instead of uniformly flat — preferring the quantized
+        # build when llama-cpp-python is installed, since that runs about four
+        # times faster on CPU. Name a repo to override. The phoneme models
+        # ("neutts-air", "neutts-nano" and its -french/-german/-spanish
+        # siblings) read plain prose well but refuse emotion entirely.
+        self.neutts_backbone = os.getenv("NEUTTS_BACKBONE", "auto")
+        self.neutts_device = os.getenv("NEUTTS_DEVICE", "cpu")
+        # "neuphonic/neucodec" (full), "neuphonic/distill-neucodec" (lighter), or
+        # "neuphonic/neucodec-onnx-decoder" (CPU decode only — cannot clone new
+        # voices, since encoding a reference clip needs the full codec).
+        self.neutts_codec = os.getenv("NEUTTS_CODEC", "neuphonic/neucodec")
+        self.neutts_codec_device = os.getenv("NEUTTS_CODEC_DEVICE", self.neutts_device)
+        # Custom cloned voices: a reference clip (3-15s, mono, clean) plus a
+        # "<name>.txt" transcript. Missing transcripts are filled in with Whisper.
+        self.neutts_ref_audio_dir = os.getenv(
+            "NEUTTS_REF_AUDIO_DIR",
+            os.path.join(os.path.dirname(config_file_dir), "models", "voices", "neutts_refs"),
+        )
+        self.neutts_default_voice = os.getenv("NEUTTS_DEFAULT_VOICE", "emily")
+        # NeuTTS is native 24 kHz and the browser resamples on playback, so the
+        # default keeps the full band rather than throwing half of it away.
+        self.neutts_sample_rate = int(os.getenv("NEUTTS_SAMPLE_RATE", "24000"))
+        self.neutts_temperature = float(os.getenv("NEUTTS_TEMPERATURE", "1.0"))
+        self.neutts_top_k = int(os.getenv("NEUTTS_TOP_K", "50"))
+        # Fixed seed makes a line reproducible take to take; unset varies it.
+        _neutts_seed = os.getenv("NEUTTS_SEED", "").strip()
+        self.neutts_seed = int(_neutts_seed) if _neutts_seed else None
+        # eSpeak language code, only needed for a phoneme backbone the library
+        # does not recognise by repo name.
+        self.neutts_language = os.getenv("NEUTTS_LANGUAGE", "").strip() or None
+        # Let the story's own cues ([mood: ...], [laugh], *she snarls*) pick the
+        # emotion each line is spoken with.
+        self.neutts_expressive = os.getenv("NEUTTS_EXPRESSIVE", "true").lower() == "true"
 
         # ---------- Soprano TTS Configuration ----------
         # Backend: "auto" (default, uses LMDeploy if available), "lmdeploy", or "transformers"

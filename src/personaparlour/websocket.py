@@ -84,7 +84,7 @@ from personaparlour.control_tags import (
     strip_speaker_prefix,
 )
 from personaparlour.engine_manager import engine_manager
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import default_chat_options, get_chat_client
 from personaparlour.memory import (
     MAX_KEEP_RECENT,
     MAX_SUMMARY_CHARS,
@@ -113,8 +113,11 @@ from personaparlour.roleplay import (
     apply_placeholders,
     build_llm_messages,
     build_presence_directive,
+    build_stop_sequences,
     parse_scene_tag,
     presence_max_beats,
+    reply_token_ceiling,
+    trimmed_side_task_history,
 )
 from personaparlour.sightlines import (
     HARVEST_TIMEOUT_SECONDS as SIGHTLINE_HARVEST_TIMEOUT_SECONDS,
@@ -171,6 +174,7 @@ from personaparlour.story_threads import (
     story_thread_cursor,
     update_story_threads,
 )
+from personaparlour.tts import StreamingExpressionTracker
 from personaparlour.utils import (
     image_to_base64,
     logger,
@@ -431,17 +435,13 @@ async def ws_endpoint(ws: WebSocket):
         scan is reading, the same background task keeps going until it catches
         the cursor up. A full rebuild is one atomic whole-story pass.
         """
-        timeout = (
-            THREAD_HARVEST_TIMEOUT_SECONDS if rebuild else THREAD_UPDATE_TIMEOUT_SECONDS
-        )
+        timeout = THREAD_HARVEST_TIMEOUT_SECONDS if rebuild else THREAD_UPDATE_TIMEOUT_SECONDS
         cancelled = False
         try:
             nonlocal story_threads_rescan_requested
             await send_json({"type": "story_threads_status", "busy": True})
             while True:
-                before = story_thread_cursor(
-                    state, len(conversation_messages(state))
-                )
+                before = story_thread_cursor(state, len(conversation_messages(state)))
                 async with state.auxiliary_lock:
                     result = await asyncio.wait_for(
                         update_story_threads(state, force=force, rebuild=rebuild),
@@ -505,9 +505,7 @@ async def ws_endpoint(ws: WebSocket):
                 # one-worker guard accepts the catch-up task.
                 asyncio.get_running_loop().call_soon(schedule_story_threads_update)
 
-    def schedule_story_threads_update(
-        *, force: bool = False, rebuild: bool = False
-    ) -> bool:
+    def schedule_story_threads_update(*, force: bool = False, rebuild: bool = False) -> bool:
         """Queue a Story Threads pass, with at most one worker per connection."""
         nonlocal story_threads_rescan_requested
         if not state.story_threads_enabled:
@@ -633,9 +631,7 @@ async def ws_endpoint(ws: WebSocket):
             logger.info("Sightlines harvest cancelled")
             raise
         except TimeoutError:
-            logger.error(
-                f"Sightlines harvest timed out after {SIGHTLINE_HARVEST_TIMEOUT_SECONDS}s"
-            )
+            logger.error(f"Sightlines harvest timed out after {SIGHTLINE_HARVEST_TIMEOUT_SECONDS}s")
             await send_json(sightlines_state_payload({"unchanged": True}))
         except Exception as e:
             logger.error(f"Sightlines harvest failed: {e}")
@@ -701,9 +697,7 @@ async def ws_endpoint(ws: WebSocket):
                 f"Character study: {added} new observation(s), {confirmed} confirmed, "
                 f"sheet now {len(state.studies)}"
             )
-            await send_json(
-                character_study_state_payload({"added": added, "confirmed": confirmed})
-            )
+            await send_json(character_study_state_payload({"added": added, "confirmed": confirmed}))
         except asyncio.CancelledError:
             cancelled = True
             logger.info("Character study pass cancelled")
@@ -758,9 +752,7 @@ async def ws_endpoint(ws: WebSocket):
             if items:
                 state.study_alert = {"items": items, "speaker": speaker}
                 logger.info(f"Character study: {len(items)} drift report(s) in the latest reply")
-                await send_json(
-                    {"type": "study_drift_alert", "items": items, "speaker": speaker}
-                )
+                await send_json({"type": "study_drift_alert", "items": items, "speaker": speaker})
             else:
                 state.study_alert = None
         except asyncio.CancelledError:
@@ -811,7 +803,9 @@ async def ws_endpoint(ws: WebSocket):
             logger.info("Character study harvest cancelled")
             raise
         except TimeoutError:
-            logger.error(f"Character study harvest timed out after {STUDY_HARVEST_TIMEOUT_SECONDS}s")
+            logger.error(
+                f"Character study harvest timed out after {STUDY_HARVEST_TIMEOUT_SECONDS}s"
+            )
             await send_json(character_study_state_payload({"unchanged": True}))
         except Exception as e:
             logger.error(f"Character study harvest failed: {e}")
@@ -1045,11 +1039,21 @@ async def ws_endpoint(ws: WebSocket):
             )
             state.presence_cursor += 1
 
+        # Sampling for this reply: a ceiling drawn from the Director's length
+        # dial, and stop sequences so the model cannot carry on past its own turn
+        # into somebody else's. The context window itself comes from the client's
+        # configured defaults.
+        reply_options = {
+            "num_predict": reply_token_ceiling(state),
+            "stop": build_stop_sequences(state, speaker_name),
+        }
+
         # Send the JSON payload that will be sent to LLM
         llm_payload = {
             "model": state.llm_model,
             "messages": llm_messages,
             "stream": True,
+            "options": {**default_chat_options(), **reply_options},
         }
         await send_json({"type": "llm_payload", "payload": llm_payload})
 
@@ -1061,6 +1065,12 @@ async def ws_endpoint(ws: WebSocket):
         # Initialize text/display filters for streamed output.
         text_filter = StreamingTextFilter()
         display_filter = StreamingHiddenTagFilter()
+        # How each phrase should be *delivered*. The TTS text filter strips the
+        # brackets and *action blocks* that carry the performance, so by the time
+        # a phrase is ready to speak its cues are gone. This reads the unfiltered
+        # stream alongside and keeps a running answer for engines that can act on
+        # one; engines that cannot simply ignore the argument.
+        expression = StreamingExpressionTracker()
         # A group reply is stored as "Mira: ..." so the model can track who spoke;
         # it copies that label into its own next reply, so strip it before the
         # reader ever sees it. Solo scenes have no cast to match and pay nothing.
@@ -1072,17 +1082,34 @@ async def ws_endpoint(ws: WebSocket):
         # (Ollama streams roughly one token per delta).
         gen_started = time.perf_counter()
         delta_count = 0
+        # Filled from the stream's final frame. Ollama has always reported what a
+        # request cost; the UI used to show a count of stream chunks instead, so
+        # the standing context could grow for a hundred turns with nothing on
+        # screen to say so.
+        usage: dict = {}
+
+        def record_usage(reported: dict) -> None:
+            usage.update(reported)
 
         try:
             logger.info("Starting LLM streaming...")
-            temp_client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-            async for delta in temp_client.stream_chat(llm_messages, model=state.llm_model):
+            client = get_chat_client(state.llm_host, state.llm_model)
+            async for delta in client.stream_chat(
+                llm_messages,
+                model=state.llm_model,
+                options=reply_options,
+                on_usage=record_usage,
+            ):
                 full += delta
                 delta_count += 1
 
                 # Filter text for TTS - only keep spoken parts (no actions/formatting)
                 filtered_delta = text_filter.process(delta)
                 buf += filtered_delta
+
+                # Read delivery cues from the raw delta, before the filters above
+                # discard the tags and action blocks that carry them.
+                expression.process(delta)
 
                 # Remove hidden IMAGE, SCENE, mood, and animation tags from display
                 # across chunk boundaries, while keeping ordinary tags like [laugh].
@@ -1107,10 +1134,11 @@ async def ws_endpoint(ws: WebSocket):
 
                     # Only synthesize audio if output mode is "voice"
                     if state.output_mode == "voice":
-                        logger.info(f"Synthesizing: {clean_phrase}")
+                        emotion = expression.take()
+                        logger.info(f"Synthesizing ({emotion or 'plain'}): {clean_phrase}")
 
                         state.speaking = True
-                        audio = await tts_engine.synthesize(clean_phrase)
+                        audio = await tts_engine.synthesize(clean_phrase, emotion=emotion)
                         logger.info(
                             f"Generated {len(audio.pcm16le)} bytes of audio at {audio.sample_rate}Hz"
                         )
@@ -1148,9 +1176,10 @@ async def ws_endpoint(ws: WebSocket):
                 if clean_buf:
                     # Only synthesize audio if output mode is "voice"
                     if state.output_mode == "voice":
-                        logger.info(f"Synthesizing final phrase: {clean_buf}")
+                        emotion = expression.take()
+                        logger.info(f"Synthesizing final phrase ({emotion or 'plain'}): {clean_buf}")
                         state.speaking = True
-                        audio = await tts_engine.synthesize(clean_buf)
+                        audio = await tts_engine.synthesize(clean_buf, emotion=emotion)
                         logger.info(
                             f"Generated {len(audio.pcm16le)} bytes of audio at {audio.sample_rate}Hz"
                         )
@@ -1188,11 +1217,13 @@ async def ws_endpoint(ws: WebSocket):
                         optimization_messages = build_image_prompt_messages(img_prompt_raw)
 
                         optimized_prompt = ""
-                        temp_client = OllamaClient(
-                            host=state.llm_host, default_model=state.llm_model
-                        )
-                        async for delta in temp_client.stream_chat(
-                            optimization_messages, model=state.llm_model
+                        client = get_chat_client(state.llm_host, state.llm_model)
+                        async for delta in client.stream_chat(
+                            optimization_messages,
+                            model=state.llm_model,
+                            think=False,
+                            # At most 40 words is the whole contract for this task.
+                            options={"num_predict": 1000},
                         ):
                             optimized_prompt += delta
 
@@ -1334,10 +1365,22 @@ async def ws_endpoint(ws: WebSocket):
                 {
                     "type": "assistant_end",
                     "elapsed_ms": elapsed_ms,
+                    # Kept for older clients, and as the fallback for a server
+                    # that reported no accounting at all.
                     "approx_tokens": delta_count,
+                    **({"usage": usage} if usage else {}),
                 }
             )
-            logger.info(f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)")
+            if usage:
+                logger.info(
+                    f"Assistant response complete in {elapsed_ms} ms — "
+                    f"{usage['prompt_tokens']} prompt + {usage['completion_tokens']} "
+                    f"generated tokens of {usage['context_limit'] or '?'} context"
+                )
+            else:
+                logger.info(
+                    f"Assistant response complete ({delta_count} chunks in {elapsed_ms} ms)"
+                )
 
             # Story Memory upkeep runs after the reply is already on screen, so
             # the summarization pass never shows up as reply latency.
@@ -1375,9 +1418,7 @@ async def ws_endpoint(ws: WebSocket):
             if schedule_story_threads_update():
                 history = conversation_messages(state)
                 covered = story_thread_cursor(state, len(history))
-                logger.info(
-                    f"Story thread pass queued ({len(history) - covered} messages pending)"
-                )
+                logger.info(f"Story thread pass queued ({len(history) - covered} messages pending)")
         except asyncio.CancelledError:
             logger.info("LLM streaming cancelled by user")
             state.speaking = False
@@ -1772,9 +1813,7 @@ async def ws_endpoint(ws: WebSocket):
                         state.story_threads = normalize_story_threads(data.get("threads"))
                     if isinstance(data.get("covered"), int):
                         history_len = len(conversation_messages(state))
-                        state.story_threads_covered = max(
-                            0, min(int(data["covered"]), history_len)
-                        )
+                        state.story_threads_covered = max(0, min(int(data["covered"]), history_len))
                     logger.info(
                         f"Story threads: {'on' if state.story_threads_enabled else 'off'}, "
                         f"auto={'on' if state.story_threads_auto else 'off'}, "
@@ -1795,8 +1834,7 @@ async def ws_endpoint(ws: WebSocket):
                     await cancel_story_threads(state)
                     state.story_threads = normalize_story_threads(data.get("threads"))
                     logger.info(
-                        f"Story thread ledger edited by user: "
-                        f"{len(state.story_threads)} thread(s)"
+                        f"Story thread ledger edited by user: {len(state.story_threads)} thread(s)"
                     )
                     await send_json(story_threads_state_payload())
 
@@ -2142,9 +2180,7 @@ async def ws_endpoint(ws: WebSocket):
                         await send_json(character_study_state_payload())
 
                     state.study_alert = None
-                    await send_json(
-                        {"type": "study_drift_resolved", "action": action or "dismiss"}
-                    )
+                    await send_json({"type": "study_drift_resolved", "action": action or "dismiss"})
 
                 elif mtype == "resolve_continuity":
                     # What the user decided about a reported contradiction. The
@@ -2335,12 +2371,19 @@ async def ws_endpoint(ws: WebSocket):
                         await send_json({"type": "error", "message": "Voice not found"})
 
                 elif mtype == "get_available_voices":
-                    voices = tts_engine.list_voices()
+                    # Re-read the engine: a mid-session switch replaces it, and
+                    # the name bound at connect time would list the old voices.
+                    active_tts = engine_manager.tts_engine or tts_engine
+                    voices = active_tts.list_voices()
                     await send_json(
                         {
                             "type": "available_voices",
                             "voices": voices,
-                            "current": tts_engine.current_voice_name,
+                            "current": active_tts.current_voice_name,
+                            "supports_emotion": bool(
+                                getattr(active_tts, "supports_emotion", False)
+                            ),
+                            "emotions": list(getattr(active_tts, "supported_emotions", [])),
                         }
                     )
 
@@ -2408,9 +2451,12 @@ async def ws_endpoint(ws: WebSocket):
                             await send_json({"type": "impersonation_start"})
 
                             # Build impersonation messages: use conversation history but swap
-                            # the final instruction to generate a user-side reply
+                            # the final instruction to generate a user-side reply.
+                            # Trimmed the same way a reply is — this used to send
+                            # the entire raw transcript, which made one click the
+                            # most expensive request in the app on a long story.
                             if state.use_context:
-                                history = state.messages
+                                history = trimmed_side_task_history(state)
                             else:
                                 system_msgs = [m for m in state.messages if m["role"] == "system"]
                                 history = system_msgs
@@ -2420,11 +2466,12 @@ async def ws_endpoint(ws: WebSocket):
                             )
 
                             full_text = ""
-                            temp_client = OllamaClient(
-                                host=state.llm_host, default_model=state.llm_model
-                            )
-                            async for delta in temp_client.stream_chat(
-                                impersonation_messages, model=state.llm_model
+                            client = get_chat_client(state.llm_host, state.llm_model)
+                            async for delta in client.stream_chat(
+                                impersonation_messages,
+                                model=state.llm_model,
+                                # One message from the user, not a scene.
+                                options={"num_predict": 1000},
                             ):
                                 full_text += delta
                                 await send_json({"type": "assistant_delta", "delta": delta})
@@ -2472,11 +2519,13 @@ async def ws_endpoint(ws: WebSocket):
                                 candidates, convo, user_name
                             )
                             raw = ""
-                            temp_client = OllamaClient(
-                                host=state.llm_host, default_model=state.llm_model
-                            )
-                            async for delta in temp_client.stream_chat(
-                                prompt_messages, model=state.llm_model
+                            client = get_chat_client(state.llm_host, state.llm_model)
+                            async for delta in client.stream_chat(
+                                prompt_messages,
+                                model=state.llm_model,
+                                think=False,
+                                # The answer is one name copied from a list.
+                                options={"num_predict": 32},
                             ):
                                 raw += delta
                                 if len(raw) > 200:
@@ -2545,18 +2594,14 @@ async def ws_endpoint(ws: WebSocket):
                             )
                         finally:
                             try:
-                                await send_json(
-                                    {"type": "character_card_status", "busy": False}
-                                )
+                                await send_json({"type": "character_card_status", "busy": False})
                             except Exception:
                                 pass  # connection likely gone
 
                     if state.character_card_task and not state.character_card_task.done():
                         logger.info("Character generation already running; ignoring request")
                     else:
-                        state.character_card_task = asyncio.create_task(
-                            generate_character_task()
-                        )
+                        state.character_card_task = asyncio.create_task(generate_character_task())
 
                 elif mtype == "suggest_replies":
                     user_name = data.get("user_name", "User")
@@ -2566,16 +2611,21 @@ async def ws_endpoint(ws: WebSocket):
                         """Generate a few short candidate replies the user could send next."""
                         try:
                             system_msgs = [m for m in state.messages if m["role"] == "system"]
-                            history = state.messages if state.use_context else system_msgs
+                            history = (
+                                trimmed_side_task_history(state)
+                                if state.use_context
+                                else system_msgs
+                            )
 
                             suggest_messages = build_reply_suggestion_messages(history, user_name)
 
                             full_text = ""
-                            temp_client = OllamaClient(
-                                host=state.llm_host, default_model=state.llm_model
-                            )
-                            async for delta in temp_client.stream_chat(
-                                suggest_messages, model=state.llm_model
+                            client = get_chat_client(state.llm_host, state.llm_model)
+                            async for delta in client.stream_chat(
+                                suggest_messages,
+                                model=state.llm_model,
+                                # Three lines of at most twenty words each.
+                                options={"num_predict": 500},
                             ):
                                 full_text += delta
 

@@ -430,15 +430,16 @@ class FakeClient:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def stream_chat(self, messages, model=None, think=None):
+    async def stream_chat(self, messages, model=None, think=None, options=None, on_usage=None):
         assert think is False, "side-tasks must not pay for a reasoning model's deliberation"
+        assert (options or {}).get("num_predict"), "a side-task must cap what it generates"
         for index in range(0, len(FakeClient.answer), 7):
             yield FakeClient.answer[index : index + 7]
 
 
 def run_review(monkeypatch, state, answer, reply, speaker="Tomas"):
     FakeClient.answer = answer
-    monkeypatch.setattr(sightlines_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(sightlines_module, "get_chat_client", lambda *a, **k: FakeClient())
     return asyncio.run(sightlines_module.review_reply(state, reply, speaker))
 
 
@@ -474,7 +475,7 @@ def test_the_check_costs_nothing_when_nothing_is_being_withheld(monkeypatch):
     everyone = ["Mira", "Tomas", USER_TOKEN]
     state = make_state(turns=6, sightlines=[new_entry("Public knowledge.", knows=everyone)])
     FakeClient.answer = '{"leaks":[],"learned":[]}'
-    monkeypatch.setattr(sightlines_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(sightlines_module, "get_chat_client", lambda *a, **k: FakeClient())
 
     assert asyncio.run(sightlines_module.review_reply(state, "Anything.", "Tomas")) is None
     assert sightlines_module.should_review(state) is False
@@ -482,7 +483,7 @@ def test_the_check_costs_nothing_when_nothing_is_being_withheld(monkeypatch):
 
 def test_a_check_with_no_model_selected_gives_up_rather_than_guessing(monkeypatch):
     state = make_state(turns=6, sightlines=[secret_entry()], llm_model=None)
-    monkeypatch.setattr(sightlines_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(sightlines_module, "get_chat_client", lambda *a, **k: FakeClient())
 
     assert asyncio.run(sightlines_module.review_reply(state, "A reply.", "Tomas")) is None
     assert asyncio.run(harvest_sightlines(state)) is None
@@ -523,11 +524,13 @@ def test_a_model_answering_in_prose_is_asked_once_more(monkeypatch):
     calls: list[list[dict]] = []
 
     class RetryingClient(FakeClient):
-        async def stream_chat(self, messages, model=None, think=None):
+        async def stream_chat(
+            self, messages, model=None, think=None, options=None, on_usage=None
+        ):
             calls.append(list(messages))
             yield "Nothing to report!" if len(calls) == 1 else '{"leaks":[],"learned":[]}'
 
-    monkeypatch.setattr(sightlines_module, "OllamaClient", RetryingClient)
+    monkeypatch.setattr(sightlines_module, "get_chat_client", lambda *a, **k: RetryingClient())
     result = asyncio.run(sightlines_module.review_reply(state, "A quiet reply.", "Tomas"))
 
     assert result == {"leaks": [], "learned": []}
@@ -540,7 +543,7 @@ def test_a_harvest_reads_the_story_and_keeps_the_audience_it_can_place(monkeypat
     FakeClient.answer = json.dumps(
         {"entries": [{"text": SECRET, "topic": TOPIC, "knows": ["Mira", "Alex"]}]}
     )
-    monkeypatch.setattr(sightlines_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(sightlines_module, "get_chat_client", lambda *a, **k: FakeClient())
 
     entries = asyncio.run(harvest_sightlines(state))
 

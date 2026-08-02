@@ -87,7 +87,7 @@ describe("normalizeStoryThreadsState", () => {
     const second = normalizeStoryThreadsState({ threads: "not-an-array" });
 
     expect(first).toEqual({
-      enabled: true,
+      enabled: false,
       auto: true,
       threads: [],
       covered: 0,

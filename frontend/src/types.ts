@@ -9,7 +9,17 @@ export type ServerMsg =
   | { type: "transcript"; text: string }
   | { type: "assistant_start" }
   | { type: "assistant_delta"; delta: string }
-  | { type: "assistant_end"; elapsed_ms?: number; approx_tokens?: number }
+  | {
+      type: "assistant_end";
+      elapsed_ms?: number;
+      approx_tokens?: number;
+      usage?: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        context_limit: number;
+      };
+    }
   | { type: "speaker_chosen"; name: string }
   | { type: "assistant_cancelled" }
   | { type: "audio_start"; sample_rate: number; format: "pcm16le" }
@@ -17,7 +27,7 @@ export type ServerMsg =
   | { type: "interrupted" }
   | { type: "chat_cleared" }
   | { type: "tts_engine_changed"; tts_engine: string; message?: string }
-  | { type: "available_voices"; voices: string[]; current: string }
+  | { type: "available_voices"; voices: string[]; current: string; supports_emotion?: boolean; emotions?: string[] }
   | { type: "llm_payload"; payload: any }
   | { type: "image_generating"; prompt: string }
   | { type: "image_generated"; image: string; prompt: string; format: string }
@@ -61,7 +71,12 @@ export interface Message {
   speaker?: string;         // Which cast character authored this reply (group scenes)
   narrator?: boolean;       // Rendered as omniscient scene narration, not dialogue
   genMs?: number;           // Generation wall time reported by the backend
-  genTokens?: number;       // Approximate token count of this generation
+  genTokens?: number;       // Tokens generated (exact when the server reported them)
+  // What this turn actually cost, straight from the model server. The prompt
+  // side is the interesting half: it is the standing context — card, memory,
+  // canon, threads, study — and it grows silently as a story goes on.
+  promptTokens?: number;
+  contextLimit?: number;    // The window those prompt tokens were measured against
   unprompted?: boolean;     // The character spoke first, into a silence
   bookmarked?: boolean;     // A user-saved story moment, persisted with the transcript
 }
@@ -209,7 +224,7 @@ export interface MemoryState {
 }
 
 export const DEFAULT_MEMORY: MemoryState = {
-  enabled: true,
+  enabled: false,
   auto: true,
   summary: "",
   covered: 0,
@@ -304,7 +319,7 @@ export interface StoryThreadsState {
 }
 
 export const DEFAULT_STORY_THREADS: StoryThreadsState = {
-  enabled: true,
+  enabled: false,
   auto: true,
   threads: [],
   covered: 0,
@@ -362,7 +377,7 @@ export interface SightlinesState {
 }
 
 export const DEFAULT_SIGHTLINES: SightlinesState = {
-  enabled: true,
+  enabled: false,
   auto: false,
   entries: [],
   participants: [],
@@ -468,7 +483,7 @@ export interface CharacterStudyState {
 }
 
 export const DEFAULT_CHARACTER_STUDY: CharacterStudyState = {
-  enabled: true,
+  enabled: false,
   auto: true,
   watch: false,
   interval: 6,
@@ -535,7 +550,7 @@ export const PRESENCE_WAIT_FACTOR: Record<PresenceMode, number> = {
 
 export type InputMode = "voice" | "text" | "call";
 export type OutputMode = "voice" | "text";
-export type TtsEngine = "piper" | "chatterbox" | "soprano";
+export type TtsEngine = "neutts" | "piper" | "chatterbox" | "soprano";
 
 /** Director controls — persistent dials that shape how the character writes. */
 export type ResponseLength = "brief" | "normal" | "detailed" | "novella";

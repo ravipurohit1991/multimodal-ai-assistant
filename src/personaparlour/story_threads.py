@@ -21,7 +21,7 @@ import re
 import uuid
 from typing import TypedDict
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.memory import conversation_messages, render_transcript
 from personaparlour.prompts import (
     build_story_thread_harvest_messages,
@@ -43,6 +43,16 @@ MAX_EVIDENCE_CHARS = 300
 MAX_MODEL_OUTPUT_CHARS = 8000
 MAX_INCREMENTAL_MESSAGES = 12
 CONTEXT_OVERLAP_MESSAGES = 4
+
+# How many new turns must pile up before an automatic pass is worth a
+# generation. The tracker used to run whenever anything at all was pending,
+# which is after every reply — a second full generation per turn, spent asking
+# whether a ledger of unresolved matters had changed in the space of one
+# exchange. It usually had not. Batching also gives the model more to read at
+# once, which is the shape this task is better at anyway.
+DEFAULT_THREAD_INTERVAL = 4
+MIN_THREAD_INTERVAL = 1
+MAX_THREAD_INTERVAL = 40
 
 THREAD_UPDATE_TIMEOUT_SECONDS = 180
 THREAD_HARVEST_TIMEOUT_SECONDS = 300
@@ -258,7 +268,7 @@ def prompt_story_threads(state) -> list[dict]:
 
 def build_story_threads_block(state) -> str:
     """Render open threads as compact, explicitly untrusted JSON context."""
-    if not getattr(state, "story_threads_enabled", True):
+    if not getattr(state, "story_threads_enabled", False):
         return ""
     threads = prompt_story_threads(state)
     if not threads:
@@ -291,11 +301,19 @@ def pending_story_thread_count(state) -> int:
     return max(0, len(history) - story_thread_cursor(state, len(history)))
 
 
+def thread_interval(state) -> int:
+    """New turns that must accumulate before an automatic pass runs."""
+    value = int(getattr(state, "story_threads_interval", DEFAULT_THREAD_INTERVAL) or 0)
+    if value <= 0:
+        value = DEFAULT_THREAD_INTERVAL
+    return max(MIN_THREAD_INTERVAL, min(MAX_THREAD_INTERVAL, value))
+
+
 def should_update_story_threads(state) -> bool:
     return bool(
-        getattr(state, "story_threads_enabled", True)
+        getattr(state, "story_threads_enabled", False)
         and getattr(state, "story_threads_auto", True)
-        and pending_story_thread_count(state) > 0
+        and pending_story_thread_count(state) >= thread_interval(state)
     )
 
 
@@ -579,8 +597,13 @@ def _valid_harvest_payload(payload: dict | None) -> bool:
 
 async def _generate(state, messages: list[dict], ceiling: int = MAX_MODEL_OUTPUT_CHARS) -> str:
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model, think=False):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=state.llm_model,
+        think=False,
+        options=structured_pass_options(ceiling),
+    ):
         raw += delta
         if len(raw) > ceiling:
             break
@@ -618,7 +641,7 @@ async def update_story_threads(
     after cancellation or a history replacement, then atomically store
     ``result["threads"]`` and ``result["covered"]``.
     """
-    if not getattr(state, "story_threads_enabled", True):
+    if not getattr(state, "story_threads_enabled", False):
         return None
     if not rebuild and not force and not getattr(state, "story_threads_auto", True):
         return None
