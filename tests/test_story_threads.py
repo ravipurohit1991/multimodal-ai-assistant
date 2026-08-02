@@ -11,6 +11,8 @@ from personaparlour.prompts import (
 from personaparlour.roleplay import build_llm_messages
 from personaparlour.state import ConnState, cancel_story_threads
 from personaparlour.story_threads import (
+    DEFAULT_THREAD_INTERVAL,
+    MAX_THREAD_INTERVAL,
     THREAD_PROMPT_LIMIT,
     active_story_threads,
     apply_incremental_thread_operations,
@@ -21,7 +23,9 @@ from personaparlour.story_threads import (
     prompt_story_threads,
     rebuild_story_threads,
     reset_story_threads,
+    should_update_story_threads,
     story_thread_cursor,
+    thread_interval,
     update_story_threads,
 )
 
@@ -592,8 +596,9 @@ class FakeClient:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def stream_chat(self, messages, model=None, think=None):
+    async def stream_chat(self, messages, model=None, think=None, options=None, on_usage=None):
         FakeClient.saw_think_false = FakeClient.saw_think_false or think is False
+        assert (options or {}).get("num_predict"), "a side-task must cap what it generates"
         index = min(FakeClient.calls, len(FakeClient.answers) - 1)
         FakeClient.calls += 1
         answer = FakeClient.answers[index]
@@ -605,7 +610,7 @@ def run_update(monkeypatch, state, answers, **kwargs):
     FakeClient.answers = list(answers)
     FakeClient.calls = 0
     FakeClient.saw_think_false = False
-    monkeypatch.setattr(thread_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(thread_module, "get_chat_client", lambda *a, **k: FakeClient())
     return asyncio.run(update_story_threads(state, **kwargs))
 
 
@@ -692,7 +697,7 @@ def test_two_invalid_answers_fail_closed_without_advancing(monkeypatch):
 
 def test_auto_off_requires_force_and_missing_model_always_skips(monkeypatch):
     state = make_state(story_threads_auto=False)
-    monkeypatch.setattr(thread_module, "OllamaClient", FakeClient)
+    monkeypatch.setattr(thread_module, "get_chat_client", lambda *a, **k: FakeClient())
 
     assert asyncio.run(update_story_threads(state)) is None
 
@@ -708,11 +713,10 @@ def test_empty_new_turn_advances_without_calling_the_model(monkeypatch):
         ]
     )
 
-    class NeverClient:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("an empty slice should not open a model request")
+    def never_client(*args, **kwargs):
+        raise AssertionError("an empty slice should not open a model request")
 
-    monkeypatch.setattr(thread_module, "OllamaClient", NeverClient)
+    monkeypatch.setattr(thread_module, "get_chat_client", never_client)
     result = asyncio.run(update_story_threads(state))
 
     assert result is not None
@@ -729,8 +733,60 @@ def test_conn_state_defaults_and_thread_task_cancellation():
 
     state = asyncio.run(exercise())
 
-    assert state.story_threads_enabled is True
+    # Off out of the box, like every other ledger; ``auto`` stays on so switching
+    # the tracker on gives it its normal behaviour without a second toggle.
+    assert state.story_threads_enabled is False
     assert state.story_threads_auto is True
     assert state.story_threads == []
     assert state.story_threads_task is None
     assert isinstance(state.auxiliary_lock, asyncio.Lock)
+
+
+# ----- How often the tracker is worth a generation ------------------------
+
+
+def test_the_tracker_waits_for_a_few_turns_rather_than_running_every_reply():
+    """It used to fire on any pending turn at all — a whole second generation
+    after every single reply, asking whether a ledger of unresolved matters had
+    changed in the space of one exchange. It usually had not."""
+    def state_with(pending):
+        messages = [{"role": "system", "content": "system contract"}]
+        messages += [{"role": "user", "content": f"turn {i}"} for i in range(pending)]
+        return make_state(messages=messages, story_threads_covered=0)
+
+    assert should_update_story_threads(state_with(1)) is False
+    assert should_update_story_threads(state_with(3)) is False
+    assert should_update_story_threads(state_with(4)) is True
+    assert should_update_story_threads(state_with(12)) is True
+
+
+def test_the_interval_is_configurable_and_clamped():
+    messages = [{"role": "system", "content": "system contract"}]
+    messages += [{"role": "user", "content": f"turn {i}"} for i in range(2)]
+
+    eager = make_state(messages=messages, story_threads_covered=0, story_threads_interval=1)
+    patient = make_state(messages=messages, story_threads_covered=0, story_threads_interval=20)
+
+    assert should_update_story_threads(eager) is True
+    assert should_update_story_threads(patient) is False
+    # A nonsensical setting falls back rather than disabling the tracker or
+    # turning it back into a per-reply pass.
+    assert thread_interval(make_state(story_threads_interval=0)) == DEFAULT_THREAD_INTERVAL
+    assert thread_interval(make_state(story_threads_interval=-5)) == DEFAULT_THREAD_INTERVAL
+    assert thread_interval(make_state(story_threads_interval=9999)) == MAX_THREAD_INTERVAL
+
+
+def test_the_interval_never_blocks_a_pass_the_reader_asked_for(monkeypatch):
+    """The gate is the scheduler's, not the pass's: a forced rebuild still runs."""
+    messages = [
+        {"role": "system", "content": "system contract"},
+        {"role": "user", "content": "One single new turn."},
+    ]
+    state = make_state(messages=messages, story_threads_covered=0)
+
+    assert should_update_story_threads(state) is False
+
+    result = run_update(monkeypatch, state, ['{"updates":[],"new":[]}'], force=True)
+
+    assert result is not None
+    assert result["covered"] == 1

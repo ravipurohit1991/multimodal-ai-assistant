@@ -80,7 +80,12 @@ export function Avatar({
   );
 }
 
-/** "2.1s · 38 tok/s" — the reply's generation stats, if the backend sent them. */
+/** "2.1s · 38 tok/s · 4.2k ctx" — the reply's generation stats, if any arrived.
+ *
+ * The context figure is the point of this line. Speed is a curiosity; what a
+ * turn costs to *send* is the number that quietly triples over a long story as
+ * the memory, canon, threads, and study blocks fill up, and it was previously
+ * invisible. */
 function genStats(message: Message): string {
   if (!message.genMs) return "";
   const secs = message.genMs / 1000;
@@ -88,7 +93,20 @@ function genStats(message: Message): string {
   if (message.genTokens && secs > 0.2) {
     out += ` · ${Math.round(message.genTokens / secs)} tok/s`;
   }
+  if (message.promptTokens) {
+    const k = message.promptTokens >= 1000
+      ? `${(message.promptTokens / 1000).toFixed(1)}k`
+      : `${message.promptTokens}`;
+    out += ` · ${k} ctx`;
+  }
   return out;
+}
+
+/** Whether this turn's prompt came close enough to the window that the server
+ *  is about to start dropping the story off the front of it. */
+function contextIsTight(message: Message): boolean {
+  if (!message.promptTokens || !message.contextLimit) return false;
+  return message.promptTokens >= message.contextLimit * 0.9;
 }
 
 export function MessageItem({
@@ -258,7 +276,24 @@ export function MessageItem({
           <span className="meta-mono">
             {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
-          {stats && <span className="meta-mono" title="Generation time · speed">{stats}</span>}
+          {stats && (
+            <span
+              className="meta-mono"
+              style={contextIsTight(message) ? { color: "var(--warn)" } : undefined}
+              title={
+                message.promptTokens
+                  ? `Generation time · speed · ${message.promptTokens} prompt tokens` +
+                    (message.contextLimit ? ` of a ${message.contextLimit} context window` : "") +
+                    (contextIsTight(message)
+                      ? " — close to the limit, so the oldest turns are being dropped. " +
+                        "Raise LLM_NUM_CTX, or trim the story's ledgers."
+                      : "")
+                  : "Generation time · speed"
+              }
+            >
+              {stats}
+            </span>
+          )}
         </div>
 
         {/* Message Bubble */}

@@ -5,9 +5,9 @@ Engine Manager - Centralized initialization and management of STT, TTS, LLM, Ima
 from personaparlour.config import config
 from personaparlour.imageexplainer import ImageExplainer
 from personaparlour.imagegen import ImageGenerator
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import OllamaClient, get_chat_client
 from personaparlour.stt import WhisperSTT
-from personaparlour.tts import ChatterboxTTS, PiperTTS, SopranoTTS
+from personaparlour.tts import ChatterboxTTS, NeuTTSEngine, PiperTTS, SopranoTTS
 from personaparlour.utils import get_resource_monitor, logger
 
 
@@ -16,7 +16,7 @@ class EngineManager:
 
     def __init__(self):
         self.stt_engine: WhisperSTT | None = None
-        self.tts_engine: PiperTTS | ChatterboxTTS | SopranoTTS | None = None
+        self.tts_engine: PiperTTS | ChatterboxTTS | SopranoTTS | NeuTTSEngine | None = None
         self.llm_client: OllamaClient | None = None
         self.image_explainer: ImageExplainer | None = None
         self.image_generator: ImageGenerator | None = None
@@ -33,13 +33,10 @@ class EngineManager:
         )
         logger.info(f"Whisper STT initialized: {config.whisper_model} on {config.whisper_device}")
 
-        # Initialize LLM
-        self.llm_client = OllamaClient(
-            host=config.llm_host,
-            default_model=config.llm_model,
-            device=config.llm_device,
-            keep_alive=config.llm_keep_alive,
-        )
+        # Initialize LLM. The same shared, configured client every generation
+        # uses — this used to be a second client that only ever reported status,
+        # so the keep_alive it was built with never reached a real request.
+        self.llm_client = get_chat_client(config.llm_host, config.llm_model)
         logger.info(
             f"LLM client initialized: {config.llm_model} at {config.llm_host} (device: {config.llm_device}, keep_alive: {config.llm_keep_alive})"
         )
@@ -78,11 +75,54 @@ class EngineManager:
         else:
             logger.info("Image Generator disabled")
 
+    def _transcribe_reference(self, audio_path: str) -> str:
+        """Caption a TTS reference clip with the already-loaded Whisper model.
+
+        NeuTTS clones a voice from a clip *and* its transcript, so a reference
+        with no caption is unusable. Rather than make the user type one out, the
+        STT engine this app already runs writes it once and it is cached to disk.
+        """
+        if self.stt_engine is None:
+            raise RuntimeError("STT engine unavailable for reference transcription")
+
+        import librosa
+        import numpy as np
+
+        # librosa reads every format NeuTTS accepts as a reference and resamples
+        # to the rate Whisper wants, so one path covers wav/mp3/flac/ogg/m4a.
+        audio, _ = librosa.load(audio_path, sr=16000, mono=True)
+        pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+        return self.stt_engine.transcribe_audio(pcm16, 16000)
+
     def _initialize_tts_engine(self, engine_type: str):
         """Initialize TTS engine based on type"""
         tts_engine = None
 
-        if engine_type == "chatterbox":
+        if engine_type == "neutts":
+            try:
+                tts_engine = NeuTTSEngine(
+                    backbone_repo=config.neutts_backbone,
+                    backbone_device=config.neutts_device,
+                    codec_repo=config.neutts_codec,
+                    codec_device=config.neutts_codec_device,
+                    ref_audio_dir=config.neutts_ref_audio_dir,
+                    default_voice=config.neutts_default_voice,
+                    target_sample_rate=config.neutts_sample_rate,
+                    temperature=config.neutts_temperature,
+                    top_k=config.neutts_top_k,
+                    language=config.neutts_language,
+                    seed=config.neutts_seed,
+                    expressive=config.neutts_expressive,
+                    transcriber=self._transcribe_reference,
+                )
+                logger.info(
+                    f"NeuTTS initialized ({config.neutts_backbone}) on {config.neutts_device}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize NeuTTS: {e}")
+                logger.warning("Falling back to Piper TTS")
+
+        elif engine_type == "chatterbox":
             try:
                 tts_engine = ChatterboxTTS(
                     model_type=config.chatterbox_model_type,
@@ -136,7 +176,8 @@ class EngineManager:
         Switch to a different TTS engine at runtime
 
         Args:
-            engine_type: Type of engine to switch to ("piper", "chatterbox", or "soprano")
+            engine_type: Type of engine to switch to ("neutts", "piper",
+                "chatterbox", or "soprano")
 
         Returns:
             Tuple of (success: bool, message: str)
@@ -205,6 +246,8 @@ class EngineManager:
                 tts_name = f"Chatterbox TTS ({config.chatterbox_model_type})"
             elif isinstance(self.tts_engine, SopranoTTS):
                 tts_name = "Soprano TTS"
+            elif isinstance(self.tts_engine, NeuTTSEngine):
+                tts_name = f"NeuTTS ({config.neutts_backbone.split('/')[-1]})"
 
             tts_info = {
                 "name": tts_name,

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **NeuTTS is the new default speech engine, and it acts the line rather than
+  reading it.** [NeuTTS](https://github.com/neuphonic/neutts) clones a voice from a
+  short reference clip and, on its `neutts-2e` backbone, takes an emotion token —
+  angry, disgusted, fearful, happy, neutral, sad, surprised. NeuTTS has no inline
+  paralinguistic markup (there is no `[laugh]` it will voice mid-sentence); one
+  utterance gets one emotion, so the work is deciding *which*. The app now routes
+  that from cues the roleplay already writes: a `[mood: wistful]` tag sets the
+  standing mood for the reply, while `[laugh]`, `[sigh]`, `[gasp]` and action
+  blocks like `*she snarls*` colour the line that follows and then step aside.
+  Mood words are matched generously — "livid", "crestfallen" and "quietly furious"
+  all land — and anything unrecognised is spoken plainly rather than guessed at.
+  Cues are read from the *unfiltered* stream, because the TTS text filter strips
+  the brackets and asterisks that carry them before a phrase is ever synthesized.
+- Four reference speakers (emily, paul, sophie, steven) ship with the package and
+  appear in the voice picker immediately. Custom voices are cloned by dropping a
+  clip into `models/voices/neutts_refs/`; NeuTTS needs the clip's transcript as
+  well as its audio, so a missing one is filled in with the Whisper model the app
+  already runs instead of being left to produce a slurred clone.
+
 ### Changed
 - Renamed the application and project from its former assistant-oriented name to
   **PersonaParlour**, including the Python package (`personaparlour`), frontend

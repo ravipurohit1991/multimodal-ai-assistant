@@ -90,15 +90,21 @@ class ConnState:
     # ----- Story Memory (rolling long-term summary) -----
     # Older turns are folded into an LLM-written "story so far" and replaced in
     # the prompt by that record, so a long roleplay keeps its continuity without
-    # resending (or silently losing) the whole transcript. Inert until the first
-    # summary exists, so short conversations behave exactly as before.
-    memory_enabled: bool = True
+    # resending (or silently losing) the whole transcript. Off by default, like
+    # every other ledger here: a new session starts as a plain conversation and
+    # the user opts into the machinery they want.
+    memory_enabled: bool = False
     memory_auto: bool = True  # summarize on its own once the backlog is big enough
     memory_summary: str = ""  # the running record, editable from the UI
     memory_covered: int = 0  # how many user/assistant turns the record covers
     memory_keep_recent: int = 12  # recent turns always sent verbatim
     memory_trigger: int = 20  # backlog size that triggers an automatic pass
     memory_task: asyncio.Task | None = None  # in-flight summarization, if any
+    # A hard ceiling on the turns sent verbatim, independent of memory. The
+    # memory cursor only trims what a summary already covers, so with memory off
+    # — or simply before its first fold — nothing bounded the prompt at all.
+    # Set above the memory window, so on default settings this never fires.
+    max_history_messages: int = 40
 
     # ----- Continuity Guard (the story's canon) -----
     # A ledger of durable facts the story has established. Injected into every
@@ -117,21 +123,29 @@ class ConnState:
     # ----- Story Threads (unresolved narrative matters) -----
     # This ledger is deliberately separate from canon: canon says what is true,
     # while threads say what remains dramatically open. The tracker runs after a
-    # reply and never delays the visible response.
-    story_threads_enabled: bool = True
+    # reply and never delays the visible response. Off by default; ``auto`` stays
+    # on so switching the ledger on gives it its normal behaviour straight away.
+    story_threads_enabled: bool = False
     story_threads_auto: bool = True
     story_threads: list[dict] = field(default_factory=list)
     story_threads_covered: int = 0
+    # New turns that must pile up before an automatic pass, matching the way the
+    # Character Study batches its learning. This used to fire on any pending
+    # turn at all, which meant a whole second generation after every single
+    # reply — the largest recurring cost in the app after the reply itself, for a
+    # ledger that rarely changes turn to turn.
+    story_threads_interval: int = 4
     story_threads_task: asyncio.Task | None = None
 
     # ----- Sightlines (who knows what) -----
     # Every other ledger here is global, which quietly makes each cast member
     # omniscient. This one is scoped: an entry records something *and* who is in
     # on it, and the reply prompt is assembled for the character about to speak.
-    # Enabled by default because the preventive half is pure filtering and an
-    # empty ledger changes no prompt at all; the watching half (``auto``) costs a
-    # background pass per reply and is opt-in, like the Continuity Guard.
-    sightlines_enabled: bool = True
+    # Off by default, like the other ledgers. Once switched on, the preventive
+    # half is pure filtering and an empty ledger changes no prompt at all; the
+    # watching half (``auto``) costs a background pass per reply and stays opt-in,
+    # like the Continuity Guard.
+    sightlines_enabled: bool = False
     sightlines_auto: bool = False
     sightlines: list[dict] = field(default_factory=list)
     sightlines_covered: int = 0  # turns the ledger has been read against
@@ -144,12 +158,13 @@ class ConnState:
     # speaks and behaves, learned from how they have actually been played, and
     # injected for whoever is about to speak.
     # ``enabled`` is the injection half: pure prompt assembly, free, and an empty
-    # study changes no prompt at all. ``auto`` is the learning half, batched every
+    # study changes no prompt at all — but off by default, like the other ledgers,
+    # so a new session starts plain. ``auto`` is the learning half, batched every
     # ``study_interval`` turns rather than run per reply, because characters do not
     # change every turn. ``watch`` is the adherence half — one pass per reply to
     # catch a reply that is not this character — and is opt-in like the Continuity
     # Guard, since that is the one part with a per-reply price.
-    character_study_enabled: bool = True
+    character_study_enabled: bool = False
     character_study_auto: bool = True
     character_study_watch: bool = False
     studies: list[dict] = field(default_factory=list)  # the traits, editable from the UI

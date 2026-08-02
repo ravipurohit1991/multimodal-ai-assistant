@@ -12,7 +12,7 @@ from PIL import Image
 from personaparlour import sessions
 from personaparlour.config import config
 from personaparlour.engine_manager import engine_manager
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client
 from personaparlour.utils import image_to_base64, logger, wipe_user_data
 
 
@@ -114,10 +114,10 @@ async def get_model_status():
 
 async def get_llm_models(host: str | None = None):
     """Fetch available models from LLM API"""
-    temp_client = OllamaClient(host or config.llm_host, config.llm_model)
+    client = get_chat_client(host or config.llm_host, config.llm_model)
     try:
-        models = await temp_client.list_models()
-        return {"models": models, "host": temp_client.host}
+        models = await client.list_models()
+        return {"models": models, "host": client.host}
     except Exception as e:
         return {"error": str(e), "models": []}
 
@@ -145,7 +145,16 @@ async def get_voices():
             tts_engine, "current_voice_name", voice_names[0] if voice_names else "unknown"
         )
 
-        return {"voices": voices, "current": current_voice}
+        return {
+            "voices": voices,
+            "current": current_voice,
+            "engine": config.tts_engine,
+            # Which emotions this engine can actually deliver. Empty means the
+            # engine speaks every line the same way, and the UI should say so
+            # rather than offer a control that does nothing.
+            "supports_emotion": bool(getattr(tts_engine, "supports_emotion", False)),
+            "emotions": list(getattr(tts_engine, "supported_emotions", [])),
+        }
     except Exception as e:
         logger.error(f"Error listing voices: {e}", exc_info=True)
         return {"voices": [], "current": "unknown", "error": str(e)}
@@ -153,7 +162,7 @@ async def get_voices():
 
 async def synthesize_tts(
     text: str = Body(..., embed=True),
-    voice: str = Body("en_GB-jenny_dioco-medium", embed=True),
+    voice: str = Body("", embed=True),
     emotion: str = Body("neutral", embed=True),
 ):
     """Synthesize text to speech on demand"""
@@ -163,7 +172,7 @@ async def synthesize_tts(
     try:
         # Load voice if different and if voice exists in current engine
         available_voices = tts_engine.list_voices()
-        if voice in available_voices and voice != tts_engine.current_voice_name:
+        if voice and voice in available_voices and voice != tts_engine.current_voice_name:
             tts_engine.load_voice(voice)
 
         # Synthesize

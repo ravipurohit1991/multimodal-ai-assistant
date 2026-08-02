@@ -73,7 +73,7 @@ describe("normalizeSightlinesState", () => {
 
     expect(normalized.entries).toEqual([]);
     expect(normalized.participants).toEqual([]);
-    expect(normalized.enabled).toBe(true);
+    expect(normalized.enabled).toBe(false);
     expect(normalized.auto).toBe(false);
   });
 });

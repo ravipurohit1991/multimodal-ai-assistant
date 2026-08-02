@@ -27,6 +27,8 @@ interface ConversationPanelProps {
   outputMode: OutputMode;
   currentVoice: string;
   availableVoices: VoiceInfo[];
+  /** Emotions the active engine can deliver; empty when it speaks everything flat. */
+  voiceEmotions: string[];
   useContext: boolean;
   includeImageGen: boolean;
   playingMessageIndex: number | null;
@@ -121,6 +123,7 @@ export function ConversationPanel({
   outputMode,
   currentVoice,
   availableVoices,
+  voiceEmotions,
   useContext,
   includeImageGen,
   playingMessageIndex,
@@ -631,6 +634,7 @@ export function ConversationPanel({
                         onChange={(event) => onTtsEngineChange(event.target.value as TtsEngine)}
                         disabled={!connected}
                       >
+                        <option value="neutts">NeuTTS</option>
                         <option value="piper">Piper</option>
                         <option value="chatterbox">Chatterbox</option>
                         <option value="soprano">Soprano</option>
@@ -646,10 +650,21 @@ export function ConversationPanel({
                         disabled={!connected}
                       >
                         {availableVoices.map((voice) => (
-                          <option key={voice.name} value={voice.name}>{voice.name}</option>
+                          <option key={voice.name} value={voice.name}>
+                            {voice.name}{voice.metadata?.kind === "cloned" ? " (cloned)" : ""}
+                          </option>
                         ))}
                       </select>
                     </div>
+                    {/* Only shown when the engine can actually act on it, so the
+                        line is a statement about this voice rather than a boast. */}
+                    {voiceEmotions.length > 0 && (
+                      <p className="action-menu-note">
+                        Expressive delivery is on — {voiceEmotions.join(", ")}, chosen per line from
+                        the scene's own cues (<code>[mood: ...]</code>, <code>[laugh]</code>,
+                        {" "}<code>*she snarls*</code>).
+                      </p>
+                    )}
                   </div>
                   <div className="action-menu-section">
                     <button

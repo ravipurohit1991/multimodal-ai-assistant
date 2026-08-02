@@ -109,7 +109,7 @@ describe("normalizeCharacterStudyState", () => {
   it("returns a safe default for junk", () => {
     const state = normalizeCharacterStudyState("nope");
     expect(state.traits).toEqual([]);
-    expect(state.enabled).toBe(true);
+    expect(state.enabled).toBe(false);
     expect(state.watch).toBe(false);
   });
 

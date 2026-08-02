@@ -61,7 +61,7 @@ import json
 import re
 import uuid
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.memory import conversation_messages, render_transcript
 from personaparlour.prompts import (
     build_study_harvest_messages,
@@ -685,7 +685,7 @@ def pending_count(state) -> int:
 
 def should_reflect(state) -> bool:
     """Whether enough has happened to justify one automatic reflection pass."""
-    if not getattr(state, "character_study_enabled", True):
+    if not getattr(state, "character_study_enabled", False):
         return False
     if not getattr(state, "character_study_auto", True):
         return False
@@ -698,7 +698,7 @@ def should_watch(state, speaker: str = "") -> bool:
     Costs nothing when the speaker has no firm sheet yet, which is the whole of a
     new story: there is nothing to be out of character *against*.
     """
-    if not getattr(state, "character_study_enabled", True):
+    if not getattr(state, "character_study_enabled", False):
         return False
     if not getattr(state, "character_study_watch", False):
         return False
@@ -747,7 +747,7 @@ def build_study_block(state, speaker: str = "") -> str:
     Returns "" when the feature is off or nothing has firmed up yet, so a fresh
     story costs exactly what it did before this feature existed.
     """
-    if not getattr(state, "character_study_enabled", True):
+    if not getattr(state, "character_study_enabled", False):
         return ""
     everyone = cast_names(state)
     me = resolve_name(speaker, everyone) or (everyone[0] if everyone else "")
@@ -1001,8 +1001,13 @@ async def _generate(state, messages: list[dict], ceiling: int) -> str:
     supposed to be invisible. None of that reasoning reaches us anyway.
     """
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model, think=False):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=state.llm_model,
+        think=False,
+        options=structured_pass_options(ceiling),
+    ):
         raw += delta
         if len(raw) > ceiling:
             break

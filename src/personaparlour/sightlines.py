@@ -38,7 +38,7 @@ import json
 import re
 import uuid
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.memory import conversation_messages, render_transcript
 from personaparlour.prompts import (
     build_sightline_harvest_messages,
@@ -368,7 +368,7 @@ def build_sightlines_block(state, speaker: str = "") -> str:
     Returns "" when the feature is off, the ledger is empty, or nothing in it is
     private — so an ordinary story pays nothing at all for this being available.
     """
-    if not getattr(state, "sightlines_enabled", True):
+    if not getattr(state, "sightlines_enabled", False):
         return ""
     entries = prompt_entries(state)
     if not entries:
@@ -615,8 +615,13 @@ async def _generate(state, messages: list[dict], ceiling: int) -> str:
     supposed to be invisible. None of that reasoning reaches us anyway.
     """
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model, think=False):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=state.llm_model,
+        think=False,
+        options=structured_pass_options(ceiling),
+    ):
         raw += delta
         if len(raw) > ceiling:
             break
@@ -625,7 +630,7 @@ async def _generate(state, messages: list[dict], ceiling: int) -> str:
 
 def should_review(state) -> bool:
     """Whether a completed reply is worth one automatic sightlines pass."""
-    if not getattr(state, "sightlines_enabled", True):
+    if not getattr(state, "sightlines_enabled", False):
         return False
     if not getattr(state, "sightlines_auto", False):
         return False

@@ -31,7 +31,7 @@ import json
 import re
 import uuid
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.memory import conversation_messages, render_transcript
 from personaparlour.prompts import (
     build_canon_harvest_messages,
@@ -356,8 +356,13 @@ async def _generate(state, messages: list[dict], ceiling: int) -> str:
     so it is asked for plainly. A model with no thinking to disable is unaffected.
     """
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model, think=False):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=state.llm_model,
+        think=False,
+        options=structured_pass_options(ceiling),
+    ):
         raw += delta
         if len(raw) > ceiling:
             break

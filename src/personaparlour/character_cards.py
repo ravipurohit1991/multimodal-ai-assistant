@@ -33,7 +33,7 @@ import json
 import random
 import re
 
-from personaparlour.llm import OllamaClient
+from personaparlour.llm import get_chat_client, structured_pass_options
 from personaparlour.prompts import build_character_card_messages
 from personaparlour.utils import logger
 
@@ -328,8 +328,13 @@ def parse_card(payload: dict, taken: list[str] | None = None) -> dict | None:
 async def _generate(state, messages: list[dict]) -> str:
     """One generation, with deliberation off — this asks for JSON, not thought."""
     raw = ""
-    client = OllamaClient(host=state.llm_host, default_model=state.llm_model)
-    async for delta in client.stream_chat(messages, model=state.llm_model, think=False):
+    client = get_chat_client(state.llm_host, state.llm_model)
+    async for delta in client.stream_chat(
+        messages,
+        model=state.llm_model,
+        think=False,
+        options=structured_pass_options(MAX_GENERATE_CHARS),
+    ):
         raw += delta
         if len(raw) > MAX_GENERATE_CHARS:
             break

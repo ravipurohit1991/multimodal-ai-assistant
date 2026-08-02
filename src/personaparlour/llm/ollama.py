@@ -5,12 +5,47 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from typing import AsyncGenerator
 
 import httpx
 
+from personaparlour.config import config
 from personaparlour.llm.base import LLMEngine
 from personaparlour.utils import logger
+
+
+def default_chat_options() -> dict:
+    """The sampling options every generation starts from.
+
+    ``num_ctx`` is the load-bearing one. Without it Ollama uses its own server
+    default and truncates anything longer, so a request can be paid for in full
+    and then arrive at the model with the conversation cut off — the standing
+    system block is sent first, so it is the story that gets dropped. Naming the
+    window explicitly is the difference between a prompt that was sent and a
+    prompt that was read.
+    """
+    options: dict[str, object] = {"num_ctx": config.llm_num_ctx}
+    if config.llm_temperature is not None:
+        options["temperature"] = config.llm_temperature
+    if config.llm_top_p is not None:
+        options["top_p"] = config.llm_top_p
+    if config.llm_repeat_penalty is not None:
+        options["repeat_penalty"] = config.llm_repeat_penalty
+    return options
+
+
+def structured_pass_options(char_ceiling: int) -> dict:
+    """Sampling options for an auxiliary pass that must return a little JSON.
+
+    Every such pass already carried a character ceiling, but it only stopped the
+    app *reading* — the model kept generating into a stream nobody was consuming.
+    Converting that same intent into a ``num_predict`` stops the work at the
+    server. Three characters per token is deliberately generous for JSON, whose
+    punctuation and short keys tokenize far denser than prose, so the ceiling
+    still lands well clear of any answer that was going to be usable.
+    """
+    return {"num_predict": max(600, int(char_ceiling) // 3)}
 
 
 class OllamaClient(LLMEngine):
@@ -41,7 +76,12 @@ class OllamaClient(LLMEngine):
         self._last_model_info = {}
 
     async def stream_chat(
-        self, messages: list[dict[str, str]], model: str | None = None, think: bool | None = None
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        think: bool | None = None,
+        options: dict | None = None,
+        on_usage: Callable[[dict], None] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completions from Ollama API.
@@ -55,12 +95,25 @@ class OllamaClient(LLMEngine):
                 minutes deliberating over a question worth a few tokens, and none
                 of that reasoning reaches the caller anyway. ``None`` leaves the
                 model's own default alone, which is what conversation wants.
+            options: Per-call sampling overrides merged over the configured
+                defaults — a ``num_predict`` ceiling, ``stop`` sequences, and so
+                on. The defaults always apply, so no caller can accidentally send
+                a request with no context window named.
+            on_usage: Called once with the token accounting from the final frame,
+                if the server sent any. A callback rather than an attribute on
+                the client, because one shared client streams several
+                conversations at once and a stashed value would belong to
+                whichever of them happened to finish last.
 
         Yields:
             Text deltas from the model
         """
         if model is None and self.default_model is None:
             raise ValueError("No model specified and no default model set")
+
+        call_options = default_chat_options()
+        if options:
+            call_options.update({k: v for k, v in options.items() if v is not None})
 
         url = f"{self.host}/api/chat"
         headers = {}
@@ -80,6 +133,7 @@ class OllamaClient(LLMEngine):
                 "messages": messages,
                 "stream": True,
                 "keep_alive": self.keep_alive,
+                "options": call_options,
             }
             if think_option is not None:
                 payload["think"] = think_option
@@ -137,6 +191,10 @@ class OllamaClient(LLMEngine):
                                 yield obj["message"]["content"]
 
                             if obj.get("done"):
+                                if on_usage is not None:
+                                    usage = self._read_usage(obj, call_options)
+                                    if usage:
+                                        on_usage(usage)
                                 break
 
                 # Successful completion; do not try more candidates.
@@ -145,6 +203,41 @@ class OllamaClient(LLMEngine):
             except Exception:
                 # Preserve original traceback for non-HTTP errors.
                 raise
+
+    def _read_usage(self, done_frame: dict, call_options: dict) -> dict:
+        """Pull the exact token accounting out of the stream's final frame.
+
+        Ollama has always reported what a request actually cost; this app used to
+        drop the frame that carries it and show a count of stream chunks instead.
+        The real numbers are free, and they are the only way a reader can see
+        that a turn is spending six thousand tokens on standing context.
+
+        ``context_limit`` rides along so the caller can say how close the prompt
+        came to the window without having to know how the client was configured.
+        """
+        prompt_tokens = done_frame.get("prompt_eval_count")
+        completion_tokens = done_frame.get("eval_count")
+        if not isinstance(prompt_tokens, int) and not isinstance(completion_tokens, int):
+            return {}
+
+        prompt_tokens = prompt_tokens if isinstance(prompt_tokens, int) else 0
+        completion_tokens = completion_tokens if isinstance(completion_tokens, int) else 0
+        limit = call_options.get("num_ctx")
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "context_limit": limit if isinstance(limit, int) else 0,
+        }
+        # A prompt that fills the window is a prompt the server has started
+        # trimming, and the trimmed part is the story. Worth a log line even
+        # when nobody is watching the UI.
+        if usage["context_limit"] and prompt_tokens >= usage["context_limit"] * 0.9:
+            logger.warning(
+                f"Prompt used {prompt_tokens} of {usage['context_limit']} context tokens. "
+                f"Raise LLM_NUM_CTX or trim the standing context before it truncates."
+            )
+        return usage
 
     async def _extract_error_text(self, response: httpx.Response | None) -> str:
         """Extract readable error text from Ollama/OpenAI-compatible error payloads."""
@@ -364,3 +457,37 @@ class OllamaClient(LLMEngine):
     def get_info(self) -> dict:
         """Get information about the Ollama client"""
         return {"name": "Ollama", "host": self.host, "default_model": self.default_model}
+
+
+# One client per host, shared by every generation in the process.
+#
+# Each call site used to build its own throwaway ``OllamaClient(host, model)``,
+# which took the constructor's default ``keep_alive`` of five minutes. The one
+# client that *was* built from ``config.llm_keep_alive`` — the engine manager's —
+# was only ever read for status display, so LOW_VRAM_MODE never actually unloaded
+# anything. Going through here means the configured keep_alive and sampling
+# options apply to every request by construction rather than by remembering.
+_CLIENT_CACHE: dict[str, OllamaClient] = {}
+
+
+def get_chat_client(host: str, model: str | None = None) -> OllamaClient:
+    """Return the shared client for ``host``, pointed at ``model``.
+
+    The model is per-request rather than per-client (a session can switch models
+    mid-story, and the auxiliary passes borrow whatever the chat is using), so it
+    is only recorded here as the fallback default. Callers still pass the model
+    explicitly to ``stream_chat``.
+    """
+    key = (host or "").rstrip("/")
+    client = _CLIENT_CACHE.get(key)
+    if client is None:
+        client = OllamaClient(
+            host=key,
+            default_model=model,
+            device=config.llm_device,
+            keep_alive=config.llm_keep_alive,
+        )
+        _CLIENT_CACHE[key] = client
+    elif model:
+        client.default_model = model
+    return client

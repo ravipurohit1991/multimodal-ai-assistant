@@ -6,8 +6,12 @@ from personaparlour.roleplay import (
     build_active_character_directive,
     build_llm_messages,
     build_presence_directive,
+    build_stop_sequences,
     describe_quiet,
     presence_max_beats,
+    reply_token_ceiling,
+    scan_lorebook,
+    trimmed_side_task_history,
 )
 
 
@@ -376,3 +380,157 @@ def test_a_solo_story_with_nothing_enabled_is_two_messages():
     assert "[Final reply check" in messages[1]["content"]
     for marker in ("Story canon", "Character study", "Sightlines", "Author's Note"):
         assert marker not in messages[1]["content"]
+
+
+# ----- The prompt's floor and ceiling -------------------------------------
+
+
+def test_history_is_capped_even_when_story_memory_never_folded_it():
+    """The cap is the backstop for the case the memory cursor cannot cover.
+
+    Memory only trims what a summary already accounts for, and the first summary
+    does not happen until thirty-odd turns have piled up. Before that — and
+    forever, if the reader switched memory off — nothing bounded the prompt.
+    """
+    turns = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"turn {index}"}
+        for index in range(120)
+    ]
+    state = make_state(
+        messages=[{"role": "system", "content": "system contract"}, *turns],
+        memory_enabled=False,
+        memory_summary="",
+        memory_covered=0,
+        max_history_messages=40,
+    )
+
+    messages = build_llm_messages(state)
+    conversation = [m for m in messages if m["role"] != "system"]
+
+    assert len(conversation) == 40
+    # The newest turns are the ones kept, and the latest is still last.
+    assert conversation[-1]["content"] == "turn 119"
+    assert "turn 79" not in [m["content"] for m in conversation]
+
+
+def test_the_cap_can_be_switched_off_for_a_reader_who_wants_everything():
+    turns = [{"role": "user", "content": f"turn {index}"} for index in range(60)]
+    state = make_state(
+        messages=[{"role": "system", "content": "system contract"}, *turns],
+        memory_enabled=False,
+        memory_summary="",
+        memory_covered=0,
+        max_history_messages=0,
+    )
+
+    conversation = [m for m in build_llm_messages(state) if m["role"] != "system"]
+
+    assert len(conversation) == 60
+
+
+def test_side_tasks_do_not_resend_the_whole_story():
+    """Impersonation and suggestions used to send `state.messages` raw."""
+    turns = [{"role": "user", "content": f"turn {index}"} for index in range(90)]
+    state = make_state(
+        messages=[{"role": "system", "content": "system contract"}, *turns],
+        memory_enabled=False,
+        memory_summary="",
+        memory_covered=0,
+        max_history_messages=40,
+    )
+
+    trimmed = trimmed_side_task_history(state)
+
+    assert [m["role"] for m in trimmed].count("system") == 1
+    assert len(trimmed) == 41
+    assert trimmed[-1]["content"] == "turn 89"
+
+
+def test_side_tasks_send_the_memory_record_instead_of_what_it_covers():
+    turns = [{"role": "user", "content": f"turn {index}"} for index in range(30)]
+    state = make_state(
+        messages=[{"role": "system", "content": "system contract"}, *turns],
+        memory_enabled=True,
+        memory_summary="Everything up to here already happened.",
+        memory_covered=20,
+        max_history_messages=40,
+    )
+
+    trimmed = trimmed_side_task_history(state)
+    conversation = [m for m in trimmed if m["role"] != "system"]
+
+    assert any("Everything up to here already happened." in m["content"] for m in trimmed)
+    assert len(conversation) == 10
+    assert conversation[0]["content"] == "turn 20"
+
+
+# ----- Sampling for one reply ---------------------------------------------
+
+
+def test_the_length_dial_sets_a_ceiling_on_what_one_reply_may_generate():
+    assert reply_token_ceiling(make_state(response_length="brief")) < reply_token_ceiling(
+        make_state(response_length="normal")
+    )
+    assert reply_token_ceiling(make_state(response_length="normal")) < reply_token_ceiling(
+        make_state(response_length="novella")
+    )
+    # An unknown dial value is treated as the middle setting rather than as
+    # "no ceiling", which is the failure this exists to prevent.
+    assert reply_token_ceiling(make_state(response_length="nonsense")) == reply_token_ceiling(
+        make_state(response_length="normal")
+    )
+
+
+def test_a_reply_stops_before_it_writes_somebody_elses_turn():
+    state = make_state(user_name="Alex", cast=["Mira", "Tomas"])
+
+    stops = build_stop_sequences(state, speaker="Mira")
+
+    assert "\nAlex:" in stops
+    assert "\nTomas:" in stops
+    # The speaker's own label is not a stop: a leading label on their own reply
+    # has no newline before it, and the prefix filter already removes it.
+    assert "\nMira:" not in stops
+
+
+def test_stop_sequences_survive_a_name_that_would_break_them():
+    state = make_state(user_name="Alex\nMira:", cast=[])
+
+    stops = build_stop_sequences(state, speaker="Mira")
+
+    assert stops == ["\nAlex Mira::"]
+
+
+# ----- Lorebook triggering ------------------------------------------------
+
+
+def test_a_keyword_does_not_fire_on_a_word_that_merely_contains_it():
+    entries = [{"keys": ["art"], "content": "The Art Guild rules the district."}]
+    recent = [{"role": "user", "content": "We should start the party at once."}]
+
+    assert scan_lorebook(entries, recent) == []
+
+
+def test_a_keyword_still_fires_on_the_word_itself():
+    entries = [{"keys": ["art"], "content": "The Art Guild rules the district."}]
+
+    assert len(scan_lorebook(entries, [{"role": "user", "content": "I sold my art."}])) == 1
+    # Punctuation and case are not boundaries the reader should have to think about.
+    assert len(scan_lorebook(entries, [{"role": "user", "content": "(Art!)"}])) == 1
+
+
+def test_a_multi_word_key_and_a_hyphenated_key_still_match():
+    entries = [
+        {"keys": ["Blackwood Manor"], "content": "It burned down."},
+        {"keys": ["K-7"], "content": "The unit that never reported back."},
+    ]
+    recent = [{"role": "user", "content": "We rode to Blackwood Manor, past K-7."}]
+
+    assert len(scan_lorebook(entries, recent)) == 2
+
+
+def test_a_case_sensitive_key_still_respects_its_case():
+    entries = [{"keys": ["IT"], "content": "The department.", "case_sensitive": True}]
+
+    assert scan_lorebook(entries, [{"role": "user", "content": "it was raining"}]) == []
+    assert len(scan_lorebook(entries, [{"role": "user", "content": "Ask IT about it."}])) == 1

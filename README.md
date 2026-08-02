@@ -82,7 +82,7 @@ The story workspace keeps local model and voice controls around a focused, cinem
 - **Vision Understanding**: Qwen3VL-2B/4B (local vision-language model)
 - **Language Model**: Ollama (supports local and cloud deployment)
 - **Image Generation**: Stable Diffusion / Qwen Image Edit
-- **Text-to-Speech**: Multiple engines (Piper, Chatterbox, Soprano)
+- **Text-to-Speech**: Multiple engines (NeuTTS, Piper, Chatterbox, Soprano)
 - **Frontend**: React + TypeScript + Vite
 - **Backend**: FastAPI + WebSockets
 
@@ -183,7 +183,49 @@ Models are automatically downloaded from HuggingFace on first run.
 
 ### Text-to-Speech
 
-**Option 1: Piper TTS (Default - Fast & Lightweight)**
+**Option 1: NeuTTS (Default - Voice Cloning + Emotional Delivery)**
+```bash
+TTS_ENGINE=neutts
+NEUTTS_BACKBONE=auto        # quantized when llama-cpp-python is installed
+NEUTTS_DEVICE=cpu           # or cuda
+NEUTTS_DEFAULT_VOICE=emily  # emily, paul, sophie, steven
+```
+
+Requires: `pip install neutts` (plus `pip install "personaparlour[gguf]"` for the
+fast quantized backbone — strongly recommended on CPU, see below)
+
+Four speakers ship with the package. To add your own, drop a clean 3–15 second
+mono clip into `src/models/voices/neutts_refs/` as `<name>.wav`.
+NeuTTS clones from the clip *and* its transcript, so write the exact words to
+`<name>.txt` beside it — if you don't, Whisper transcribes it once on first use
+and caches the result.
+
+*Delivery* is what makes this the default. The `neutts-2e` backbone takes an
+emotion token (angry, disgusted, fearful, happy, neutral, sad, surprised), and
+the app picks one per line from cues the scene already writes:
+
+| Cue in the reply | Effect |
+| --- | --- |
+| `[mood: wistful]` | Sets the standing mood for the rest of the reply |
+| `[laugh]` `[sigh]` `[gasp]` `[scoff]` | Colours the line that follows, then clears |
+| `*she snarls, backing away*` | Same, read from the action block |
+
+Mood words are matched generously — "livid", "crestfallen" and "quietly furious"
+all route correctly — and anything unrecognised is simply spoken plainly. Set
+`NEUTTS_EXPRESSIVE=false` to turn routing off.
+
+> **Speed matters here.** Measured on a 12-thread CPU, the plain torch backbone
+> runs about **12× slower than real time** — too slow to hold a conversation —
+> while the quantized `q8` build runs about **4×**. `NEUTTS_BACKBONE=auto` picks
+> the quantized one whenever `llama-cpp-python` is installed, so on a CPU-only
+> machine install it (`pip install "personaparlour[gguf]"`) and leave the setting
+> alone. With a CUDA build of PyTorch, set `NEUTTS_DEVICE=cuda` instead.
+
+The phoneme backbones (`neutts-air`, `neutts-nano` and its `-french`, `-german`,
+`-spanish` siblings) read plain narration well and cover more languages, but they
+reject emotion tokens outright — expression routing switches itself off for them.
+
+**Option 2: Piper TTS (Fast & Lightweight)**
 ```bash
 TTS_ENGINE=piper
 PIPER_USE_CUDA=true
@@ -193,7 +235,7 @@ Download voices from: https://huggingface.co/rhasspy/piper-voices/tree/main
 
 Place `.onnx` and `.json` files in: `src/models/voices/pipertts/`
 
-**Option 2: Chatterbox TTS (Expressive)**
+**Option 3: Chatterbox TTS (Expressive)**
 ```bash
 TTS_ENGINE=chatterbox
 CHATTERBOX_DEVICE=cuda
@@ -201,7 +243,7 @@ CHATTERBOX_DEVICE=cuda
 
 Requires: `pip install chatterbox-tts`
 
-**Option 3: Soprano TTS (Fast & Lightweight)**
+**Option 4: Soprano TTS (Fast & Lightweight)**
 ```bash
 TTS_ENGINE=soprano
 SOPRANO_DEVICE=cuda

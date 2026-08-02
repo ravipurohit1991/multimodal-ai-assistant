@@ -257,7 +257,7 @@ class ImageExplainer(ImageExplainerEngine):
         from PIL import Image
 
         from personaparlour.config import config
-        from personaparlour.llm import OllamaClient
+        from personaparlour.llm import default_chat_options, get_chat_client
         from personaparlour.utils import image_to_base64
 
         try:
@@ -266,8 +266,8 @@ class ImageExplainer(ImageExplainerEngine):
 
             logger.info(f"Explaining image using Ollama model: {ollama_model}")
 
-            # Initialize temp client just to get host
-            client = OllamaClient(host=config.llm_host, default_model=ollama_model)
+            # The shared client, for its host and keep_alive settings
+            client = get_chat_client(config.llm_host, ollama_model)
 
             # Prepare image
             with Image.open(image_path) as img:
@@ -286,9 +286,20 @@ class ImageExplainer(ImageExplainerEngine):
             if system_prompt:
                 messages.insert(0, {"role": "system", "content": system_prompt})
 
-            # Use sync httpx request
+            # Use sync httpx request. ``max_tokens`` is honoured here the same way
+            # the local vision model honours it: an unbounded description is not
+            # just a slow request, it is appended to the user's message and then
+            # resent with every later turn for the rest of the conversation.
+            options = default_chat_options()
+            options["num_predict"] = self.max_tokens
             url = f"{client.host}/api/chat"
-            payload = {"model": ollama_model, "messages": messages, "stream": False}
+            payload = {
+                "model": ollama_model,
+                "messages": messages,
+                "stream": False,
+                "keep_alive": client.keep_alive,
+                "options": options,
+            }
 
             logger.debug(f"Sending request to Ollama: {url} for model {ollama_model}")
 
